@@ -11,14 +11,19 @@ import {
 import {
   BANK_OFFERS,
   PERSONA_PRESETS,
+  defaultKycCase,
   initialState,
+  kycApprovalReady,
   kycDocKeys,
   kycOptionalDocKeys,
+  makeAuditEvent,
   mockEligibleAmount,
   type AppState,
   type DemoPersona,
   type DocStatus,
   type JourneySheet,
+  type KycCaseState,
+  type KycErrorClass,
   type NavSection,
   type ScreenId,
 } from "./types";
@@ -38,12 +43,24 @@ type PrototypeContextValue = {
   patchKyc: (
     patch: Partial<AppState["kyc"]> | ((kyc: AppState["kyc"]) => Partial<AppState["kyc"]>),
   ) => void;
+  patchKycCase: (
+    patch: Partial<KycCaseState> | ((c: KycCaseState) => Partial<KycCaseState>),
+    audit?: { actor: string; event: string; reasonCode?: string },
+  ) => void;
   toggleShortlist: (bankId: string) => void;
   selectBank: (bankId: string) => void;
   selectedBank: (typeof BANK_OFFERS)[number] | null;
   setKycDoc: (key: string, status?: DocStatus) => void;
   setVerifyDoc: (key: string) => void;
-  markKycComplete: () => void;
+  /** Guarded: only marks complete when case approval guards pass. */
+  markKycComplete: () => boolean;
+  submitKycCase: () => void;
+  rejectKycCase: (reasonCode?: string) => void;
+  expireKycCase: () => void;
+  withdrawKycCase: () => void;
+  resumeKycCase: () => void;
+  runRiskAssessment: (outcome?: "low" | "medium" | "high" | "sanctions" | "fraud") => void;
+  reviewerAction: (action: "approved" | "reupload" | "rejected" | "escalated") => void;
   advanceTrack: () => void;
   startLoan: (type: AppState["loanType"]) => void;
   setResidency: (residency: NonNullable<AppState["residency"]>) => void;
@@ -130,6 +147,30 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const patchKycCase = useCallback(
+    (
+      patch: Partial<KycCaseState> | ((c: KycCaseState) => Partial<KycCaseState>),
+      audit?: { actor: string; event: string; reasonCode?: string },
+    ) => {
+      setState((s) => {
+        const current = s.kyc.case ?? defaultKycCase();
+        const nextPatch = typeof patch === "function" ? patch(current) : patch;
+        const nextCase: KycCaseState = { ...current, ...nextPatch };
+        if (audit) {
+          nextCase.auditTrail = [
+            ...current.auditTrail,
+            makeAuditEvent(audit.actor, audit.event, current.caseStatus, nextCase.caseStatus, {
+              reasonCode: audit.reasonCode,
+              correlationId: nextCase.correlationId,
+            }),
+          ];
+        }
+        return { ...s, kyc: { ...s.kyc, case: nextCase } };
+      });
+    },
+    [],
+  );
+
   const toggleShortlist = useCallback((bankId: string) => {
     setState((s) => ({
       ...s,
@@ -158,12 +199,24 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         (current === "not_started" || current === "rejected" || current === "expired"
           ? "uploaded"
           : "not_started");
+      const caseState = s.kyc.case ?? defaultKycCase();
+      const docMeta = { ...caseState.docMeta };
+      if (next === "uploaded") {
+        docMeta[key] = { ...(docMeta[key] ?? {}), processing: true, ocrConfidence: undefined, blurry: false };
+      } else if (next === "not_started") {
+        delete docMeta[key];
+      }
       return {
         ...s,
         kyc: {
           ...s.kyc,
           docs: { ...s.kyc.docs, [key]: next },
           selfieCaptureOpen: key === "selfie" && next === "uploaded" ? false : s.kyc.selfieCaptureOpen,
+          case: {
+            ...caseState,
+            caseStatus: caseState.caseStatus === "draft" ? "in_progress" : caseState.caseStatus,
+            docMeta,
+          },
         },
       };
     });
@@ -180,20 +233,366 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const markKycComplete = useCallback(() => {
-    setState((s) => ({
-      ...s,
-      kyc: {
-        ...s.kyc,
-        complete: true,
-        identityVerified: true,
-        addressVerified: true,
-        complianceDone: true,
-      },
-      loanStatus: "kyc",
-      screen: "overview",
-      sheet: "kyc",
-      kycStep: 6,
-    }));
+    let ok = false;
+    setState((s) => {
+      const required = kycDocKeys(s.residency);
+      const docsOk = required.every((key) => docSatisfiesKycRequirement(s.kyc.docs[key]));
+      const caseState = s.kyc.case ?? defaultKycCase();
+      if (!kycApprovalReady(caseState, docsOk)) {
+        return {
+          ...s,
+          kyc: {
+            ...s.kyc,
+            complianceDone: true,
+            case: {
+              ...caseState,
+              caseStatus: "manual_review",
+              lastErrorClass: "business_rule" as KycErrorClass,
+              lastReasonCode: "APPROVAL_GUARDS_FAILED",
+              auditTrail: [
+                ...caseState.auditTrail,
+                makeAuditEvent(
+                  "system",
+                  "kyc.submit_blocked",
+                  caseState.caseStatus,
+                  "manual_review",
+                  { reasonCode: "APPROVAL_GUARDS_FAILED", correlationId: caseState.correlationId },
+                ),
+              ],
+            },
+          },
+          loanStatus: "kyc",
+          sheet: "kyc",
+          kycStep: 8,
+        };
+      }
+      ok = true;
+      return {
+        ...s,
+        kyc: {
+          ...s.kyc,
+          complete: true,
+          identityVerified: true,
+          addressVerified: true,
+          complianceDone: true,
+          case: {
+            ...caseState,
+            caseStatus: "verified",
+            consent: caseState.consent === "pending" ? "recorded" : caseState.consent,
+            risk: { ...caseState.risk, phase: "cleared", amlClear: true, sanctionsClear: true },
+            auditTrail: [
+              ...caseState.auditTrail,
+              makeAuditEvent("system", "kyc.verified", caseState.caseStatus, "verified", {
+                correlationId: caseState.correlationId,
+              }),
+            ],
+          },
+        },
+        loanStatus: "kyc",
+        screen: "overview",
+        sheet: "kyc",
+        kycStep: 8,
+      };
+    });
+    return ok;
+  }, []);
+
+  const submitKycCase = useCallback(() => {
+    setState((s) => {
+      const caseState = s.kyc.case ?? defaultKycCase();
+      return {
+        ...s,
+        kyc: {
+          ...s.kyc,
+          case: {
+            ...caseState,
+            caseStatus: "in_progress",
+            consent: caseState.consent === "pending" ? "accepted" : caseState.consent,
+            auditTrail: [
+              ...caseState.auditTrail,
+              makeAuditEvent("customer", "kyc.submitted", caseState.caseStatus, "in_progress", {
+                correlationId: caseState.correlationId,
+              }),
+            ],
+          },
+        },
+      };
+    });
+  }, []);
+
+  const rejectKycCase = useCallback((reasonCode = "REVIEWER_REJECT") => {
+    setState((s) => {
+      const caseState = s.kyc.case ?? defaultKycCase();
+      return {
+        ...s,
+        kyc: {
+          ...s.kyc,
+          complete: false,
+          complianceDone: true,
+          case: {
+            ...caseState,
+            caseStatus: "rejected",
+            lastErrorClass: "fraud",
+            lastReasonCode: reasonCode,
+            manualReview: { outcome: "rejected", note: reasonCode },
+            auditTrail: [
+              ...caseState.auditTrail,
+              makeAuditEvent("reviewer", "kyc.rejected", caseState.caseStatus, "rejected", {
+                reasonCode,
+                correlationId: caseState.correlationId,
+              }),
+            ],
+          },
+        },
+        loanStatus: "kyc",
+        sheet: "kyc",
+        kycStep: 8,
+      };
+    });
+  }, []);
+
+  const expireKycCase = useCallback(() => {
+    setState((s) => {
+      const caseState = s.kyc.case ?? defaultKycCase();
+      return {
+        ...s,
+        kyc: {
+          ...s.kyc,
+          complete: false,
+          case: {
+            ...caseState,
+            caseStatus: "expired",
+            sessionActive: false,
+            consent: "expired",
+            lastErrorClass: "business_rule",
+            lastReasonCode: "SESSION_TIMEOUT",
+            auditTrail: [
+              ...caseState.auditTrail,
+              makeAuditEvent("scheduler", "kyc.expired", caseState.caseStatus, "expired", {
+                reasonCode: "SESSION_TIMEOUT",
+                correlationId: caseState.correlationId,
+              }),
+            ],
+          },
+        },
+        loanStatus: "kyc",
+        sheet: "kyc",
+        kycStep: 8,
+      };
+    });
+  }, []);
+
+  const withdrawKycCase = useCallback(() => {
+    setState((s) => {
+      const caseState = s.kyc.case ?? defaultKycCase();
+      return {
+        ...s,
+        kyc: {
+          ...s.kyc,
+          complete: false,
+          case: {
+            ...caseState,
+            caseStatus: "withdrawn",
+            lastReasonCode: "CUSTOMER_CANCEL",
+            auditTrail: [
+              ...caseState.auditTrail,
+              makeAuditEvent("customer", "kyc.withdrawn", caseState.caseStatus, "withdrawn", {
+                reasonCode: "CUSTOMER_CANCEL",
+                correlationId: caseState.correlationId,
+              }),
+            ],
+          },
+        },
+        loanStatus: "kyc",
+        sheet: "kyc",
+        kycStep: 8,
+      };
+    });
+  }, []);
+
+  const resumeKycCase = useCallback(() => {
+    setState((s) => {
+      const caseState = s.kyc.case ?? defaultKycCase();
+      return {
+        ...s,
+        kyc: {
+          ...s.kyc,
+          case: {
+            ...caseState,
+            caseStatus: "in_progress",
+            sessionActive: true,
+            consent: caseState.consent === "expired" ? "accepted" : caseState.consent,
+            lastErrorClass: null,
+            lastReasonCode: "",
+            auditTrail: [
+              ...caseState.auditTrail,
+              makeAuditEvent("customer", "kyc.resumed", caseState.caseStatus, "in_progress", {
+                correlationId: caseState.correlationId,
+              }),
+            ],
+          },
+        },
+        loanStatus: "kyc",
+        sheet: "kyc",
+        kycStep: Math.min(s.kycStep, 4) as AppState["kycStep"],
+      };
+    });
+  }, []);
+
+  const runRiskAssessment = useCallback(
+    (outcome: "low" | "medium" | "high" | "sanctions" | "fraud" = "low") => {
+      setState((s) => {
+        const caseState = s.kyc.case ?? defaultKycCase();
+        let risk = { ...caseState.risk };
+        let caseStatus = caseState.caseStatus;
+        let lastErrorClass: KycErrorClass = null;
+        let lastReasonCode = "";
+        if (outcome === "low") {
+          risk = { phase: "low", amlClear: true, sanctionsClear: true, fraudScore: 15 };
+        } else if (outcome === "medium") {
+          risk = { phase: "medium", amlClear: true, sanctionsClear: true, fraudScore: 45 };
+          caseStatus = "manual_review";
+        } else if (outcome === "high") {
+          risk = { phase: "high", amlClear: true, sanctionsClear: true, fraudScore: 72 };
+          caseStatus = "manual_review";
+        } else if (outcome === "sanctions") {
+          risk = { phase: "rejected", amlClear: false, sanctionsClear: false, fraudScore: 90 };
+          caseStatus = "rejected";
+          lastErrorClass = "fraud";
+          lastReasonCode = "SANCTIONS_HIT";
+        } else {
+          risk = { phase: "manual_review", amlClear: true, sanctionsClear: true, fraudScore: 88 };
+          caseStatus = "manual_review";
+          lastErrorClass = "fraud";
+          lastReasonCode = "FRAUD_SCORE_HIGH";
+        }
+        return {
+          ...s,
+          kyc: {
+            ...s.kyc,
+            case: {
+              ...caseState,
+              caseStatus,
+              risk,
+              lastErrorClass,
+              lastReasonCode,
+              auditTrail: [
+                ...caseState.auditTrail,
+                makeAuditEvent("risk_engine", "risk.calculated", caseState.caseStatus, caseStatus, {
+                  reasonCode: lastReasonCode || outcome.toUpperCase(),
+                  correlationId: caseState.correlationId,
+                }),
+              ],
+            },
+          },
+          kycStep: 8,
+          sheet: "kyc",
+        };
+      });
+    },
+    [],
+  );
+
+  const reviewerAction = useCallback((action: "approved" | "reupload" | "rejected" | "escalated") => {
+    setState((s) => {
+      const caseState = s.kyc.case ?? defaultKycCase();
+      if (action === "approved") {
+        return {
+          ...s,
+          kyc: {
+            ...s.kyc,
+            complete: true,
+            identityVerified: true,
+            addressVerified: true,
+            complianceDone: true,
+            case: {
+              ...caseState,
+              caseStatus: "verified",
+              manualReview: { outcome: "approved" },
+              risk: { ...caseState.risk, phase: "cleared", amlClear: true, sanctionsClear: true },
+              auditTrail: [
+                ...caseState.auditTrail,
+                makeAuditEvent("reviewer", "review.approved", caseState.caseStatus, "verified", {
+                  correlationId: caseState.correlationId,
+                }),
+              ],
+            },
+          },
+          kycStep: 8,
+          sheet: "kyc",
+          loanStatus: "kyc",
+        };
+      }
+      if (action === "rejected") {
+        return {
+          ...s,
+          kyc: {
+            ...s.kyc,
+            complete: false,
+            case: {
+              ...caseState,
+              caseStatus: "rejected",
+              manualReview: { outcome: "rejected" },
+              auditTrail: [
+                ...caseState.auditTrail,
+                makeAuditEvent("reviewer", "review.rejected", caseState.caseStatus, "rejected", {
+                  correlationId: caseState.correlationId,
+                }),
+              ],
+            },
+          },
+          kycStep: 8,
+          sheet: "kyc",
+        };
+      }
+      if (action === "reupload") {
+        const docs = { ...s.kyc.docs };
+        for (const key of Object.keys(docs)) {
+          if (docs[key] === "uploaded" || docs[key] === "under_review") docs[key] = "rejected";
+        }
+        return {
+          ...s,
+          kyc: {
+            ...s.kyc,
+            identityVerified: false,
+            complete: false,
+            docs,
+            case: {
+              ...caseState,
+              caseStatus: "in_progress",
+              manualReview: { outcome: "reupload", note: "Request reupload" },
+              auditTrail: [
+                ...caseState.auditTrail,
+                makeAuditEvent("reviewer", "review.reupload", caseState.caseStatus, "in_progress", {
+                  correlationId: caseState.correlationId,
+                }),
+              ],
+            },
+          },
+          kycStep: 4,
+          sheet: "kyc",
+        };
+      }
+      return {
+        ...s,
+        kyc: {
+          ...s.kyc,
+          case: {
+            ...caseState,
+            caseStatus: "manual_review",
+            manualReview: { outcome: "escalated" },
+            auditTrail: [
+              ...caseState.auditTrail,
+              makeAuditEvent("reviewer", "review.escalated", caseState.caseStatus, "manual_review", {
+                correlationId: caseState.correlationId,
+              }),
+            ],
+          },
+        },
+        kycStep: 8,
+        sheet: "kyc",
+      };
+    });
   }, []);
 
   const advanceTrack = useCallback(() => {
@@ -328,12 +727,20 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       patchEmployment,
       patchProperty,
       patchKyc,
+      patchKycCase,
       toggleShortlist,
       selectBank,
       selectedBank,
       setKycDoc,
       setVerifyDoc,
       markKycComplete,
+      submitKycCase,
+      rejectKycCase,
+      expireKycCase,
+      withdrawKycCase,
+      resumeKycCase,
+      runRiskAssessment,
+      reviewerAction,
       advanceTrack,
       startLoan,
       setResidency,
@@ -356,12 +763,20 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       patchEmployment,
       patchProperty,
       patchKyc,
+      patchKycCase,
       toggleShortlist,
       selectBank,
       selectedBank,
       setKycDoc,
       setVerifyDoc,
       markKycComplete,
+      submitKycCase,
+      rejectKycCase,
+      expireKycCase,
+      withdrawKycCase,
+      resumeKycCase,
+      runRiskAssessment,
+      reviewerAction,
       advanceTrack,
       startLoan,
       setResidency,

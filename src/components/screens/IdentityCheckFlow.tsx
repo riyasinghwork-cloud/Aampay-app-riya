@@ -123,6 +123,16 @@ export function IdentityCheckFlow({
   consentShare,
   onConsentShareChange,
   nameMismatch,
+  aadhaarOtpExpired = false,
+  onAadhaarOtpExpiredChange,
+  apiOutage = false,
+  onApiOutageChange,
+  duplicatePan = false,
+  onDuplicatePanChange,
+  ckycFound = false,
+  onCkycAcknowledge,
+  consentExpired = false,
+  onRenewConsent,
 }: {
   isNri: boolean;
   fullName: string;
@@ -142,6 +152,16 @@ export function IdentityCheckFlow({
   consentShare: boolean;
   onConsentShareChange: (value: boolean) => void;
   nameMismatch: boolean;
+  aadhaarOtpExpired?: boolean;
+  onAadhaarOtpExpiredChange?: (value: boolean) => void;
+  apiOutage?: boolean;
+  onApiOutageChange?: (value: boolean) => void;
+  duplicatePan?: boolean;
+  onDuplicatePanChange?: (value: boolean) => void;
+  ckycFound?: boolean;
+  onCkycAcknowledge?: () => void;
+  consentExpired?: boolean;
+  onRenewConsent?: () => void;
 }) {
   const setPhase = onPhaseChange;
   const setPanInDigilocker = onPanInDigilockerChange;
@@ -160,6 +180,110 @@ export function IdentityCheckFlow({
     const t = window.setTimeout(() => setPhase("digilocker_results"), 1600);
     return () => window.clearTimeout(t);
   }, [phase, setPhase]);
+
+  if (consentExpired) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-[16px] border border-[#C9A227] bg-[#F5E6A8]/40 p-4">
+          <p className="text-[16px] font-semibold">Consent expired</p>
+          <p className="text-[16px] text-text-secondary">
+            DigiLocker / e-KYC consent is no longer valid. Renew consent to continue identity verification.
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            onRenewConsent?.();
+            setPhase("digilocker_consent");
+          }}
+        >
+          Renew consent
+        </Button>
+        <Button variant="ghost" onClick={() => setPhase("intro")}>
+          Back to options
+        </Button>
+      </div>
+    );
+  }
+
+  if (phase === "api_outage" || apiOutage) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-[16px] border border-[#C9A227] bg-[#F5E6A8]/40 p-4">
+          <p className="text-[16px] font-semibold">Identity API unavailable</p>
+          <p className="text-[16px] text-text-secondary">
+            PAN / Aadhaar services are temporarily down. Retry or switch to manual verification.
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            onApiOutageChange?.(false);
+            setPhase("digilocker_fetching");
+          }}
+        >
+          Retry API
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            onApiOutageChange?.(false);
+            setPhase("manual_pan");
+          }}
+        >
+          Manual verification
+        </Button>
+      </div>
+    );
+  }
+
+  if (duplicatePan) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-[16px] border border-[#C9A227] bg-[#F5E6A8]/40 p-4">
+          <p className="text-[16px] font-semibold">Duplicate PAN detected</p>
+          <p className="text-[16px] text-text-secondary">
+            This PAN is already linked to another AAMPAY profile. Contact support or use a different PAN.
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            onDuplicatePanChange?.(false);
+            setPhase("manual_pan");
+          }}
+        >
+          Enter different PAN
+        </Button>
+        <Button variant="ghost" onClick={() => setPhase("intro")}>
+          Back
+        </Button>
+      </div>
+    );
+  }
+
+  if (phase === "ckyc_found" || (ckycFound && phase !== "intro" && phase !== "done")) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-[16px] border border-black bg-lime-soft/50 p-4 app-active-shadow">
+          <p className="text-[16px] font-semibold">Existing CKYC record found</p>
+          <p className="text-[16px] text-text-secondary">
+            Central KYC registry returned a match. You can reuse verified identity details or continue DigiLocker.
+          </p>
+        </div>
+        <IdentityStatusList aadhaar="verified" pan="verified" />
+        <Button
+          onClick={() => {
+            onCkycAcknowledge?.();
+            onStatusChange({ pan: "verified", aadhaar: "verified" });
+            setPhase("done");
+          }}
+        >
+          Use CKYC identity
+        </Button>
+        <Button variant="secondary" onClick={() => setPhase("intro")}>
+          Verify again
+        </Button>
+      </div>
+    );
+  }
 
   if (phase === "intro") {
     return (
@@ -376,28 +500,6 @@ export function IdentityCheckFlow({
             Verify Aadhaar
           </Button>
         )}
-        {aadhaarInDigilocker && !panInDigilocker && (
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setPanInDigilocker(true);
-              setPhase("pan_confirm");
-            }}
-          >
-            Simulate PAN also found
-          </Button>
-        )}
-        {aadhaarInDigilocker && panInDigilocker && (
-          <Button
-            variant="secondary"
-            onClick={() => {
-              onAadhaarInDigilockerChange(false);
-              setPanInDigilocker(false);
-            }}
-          >
-            Simulate both missing
-          </Button>
-        )}
         <Button variant="ghost" onClick={() => setPhase("intro")}>
           Cancel
         </Button>
@@ -451,6 +553,27 @@ export function IdentityCheckFlow({
 
   if (phase === "aadhaar_otp") {
     const otpOk = otp.replace(/\D/g, "").length === 6;
+    if (aadhaarOtpExpired) {
+      return (
+        <div className="space-y-4">
+          <div className="rounded-[16px] border border-[#C9A227] bg-[#F5E6A8]/40 p-4">
+            <p className="text-[16px] font-semibold">Aadhaar OTP expired</p>
+            <p className="text-[16px] text-text-secondary">Request a new OTP to continue e-KYC.</p>
+          </div>
+          <Button
+            onClick={() => {
+              onAadhaarOtpExpiredChange?.(false);
+              setOtp("");
+            }}
+          >
+            Resend OTP
+          </Button>
+          <Button variant="ghost" onClick={() => setPhase("digilocker_results")}>
+            Back
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className="space-y-4">
         <div className="rounded-[16px] border border-black bg-white p-4 app-active-shadow">
@@ -471,7 +594,10 @@ export function IdentityCheckFlow({
         <button
           type="button"
           className="text-[16px] font-semibold text-text-secondary underline"
-          onClick={() => setOtp("123456")}
+          onClick={() => {
+            onAadhaarOtpExpiredChange?.(false);
+            setOtp("123456");
+          }}
         >
           Resend OTP (demo fills 123456)
         </button>
@@ -632,14 +758,6 @@ export function IdentityCheckFlow({
           aadhaarLabel={`Aadhaar · XXXX-XXXX-${aadhaarLast4}`}
           panLabel={`PAN · ${panInput}`}
         />
-        <Button
-          onClick={() => {
-            onStatusChange({ pan: "verified", aadhaar: "verified" });
-            setPhase("done");
-          }}
-        >
-          Simulate verification complete (1–3 days later)
-        </Button>
         <Button variant="secondary" onClick={onContinue}>
           Continue while pending
         </Button>

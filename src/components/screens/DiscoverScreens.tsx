@@ -5,8 +5,8 @@ import { AccordionStep } from "@/components/ui/Accordion";
 import { Button } from "@/components/ui/Button";
 import { ChoicePill, Field, Input, Select } from "@/components/ui/Field";
 import { Screen } from "@/components/ui/Screen";
-import { BankLogo, BankLogoStack } from "@/components/ui/BankLogo";
-import { BANK_OFFERS, mockEligibleRange } from "@/lib/types";
+import { BankLogo } from "@/components/ui/BankLogo";
+import { BANK_OFFERS } from "@/lib/types";
 import { usePrototype } from "@/lib/state";
 
 function offersUnlocked(loanStatus: string, searching: boolean) {
@@ -48,18 +48,18 @@ export function DiscoverScreen() {
   const handleCalculate = () => {
     setCalculating(true);
     submitDiscover();
-    window.setTimeout(() => setCalculating(false), 800);
-  };
-
-  const handleSeeOffers = () => {
-    runOfferSearch();
+    window.setTimeout(() => {
+      setCalculating(false);
+      // Keep the sheet open and expand Compare bank offers with refreshed results.
+      runOfferSearch();
+    }, 800);
   };
 
   const offersSummary = selectedBank?.name ?? (state.shortlist.length ? `${state.shortlist.length} saved` : "HDFC · SBI · ICICI");
 
   return (
     <Screen
-      title={isTransfer ? "Transfer offers" : "Check eligibility"}
+      title={isTransfer ? "Transfer offers" : "Find Loan Offers"}
       onBack={() => goTo("overview")}
     >
       <p className="mb-4 text-[16px] font-semibold uppercase tracking-wide text-text-muted">
@@ -139,54 +139,13 @@ export function DiscoverScreen() {
             </div>
 
             <Button onClick={handleCalculate} disabled={calculating}>
-              {calculating ? "Calculating…" : calculated ? "Recalculate eligibility" : "Calculate eligibility"}
+              {calculating ? "Finding offers…" : calculated ? "Update details" : "View Bank Offers"}
             </Button>
           </div>
         </AccordionStep>
 
         <AccordionStep
           step={2}
-          title={isTransfer ? "Transfer eligibility" : "Your eligibility"}
-          summary={calculated && !calculating ? state.eligibleAmount : undefined}
-          open={openStep === 2}
-          onToggle={() => {
-            if (calculated || calculating) setDiscoverStep(2);
-          }}
-          done={calculated && !calculating}
-          locked={!calculated && !calculating}
-        >
-          {calculating || !calculated ? (
-            <div className="space-y-4 py-1">
-              <div className="h-28 animate-shimmer rounded-[16px]" />
-              <div className="h-3 w-1/3 animate-shimmer rounded-full" />
-              <p className="text-[16px] text-text-secondary">Matching you with partner banks…</p>
-            </div>
-          ) : (
-            <div className="space-y-4 animate-success-reveal">
-              <div className="rounded-[16px] bg-lime p-4 text-black">
-                <p className="text-[16px] font-semibold text-black/60">
-                  {isTransfer ? "Estimated transfer amount" : "Estimated loan amount"}
-                </p>
-                <p className="text-[32px] font-semibold tracking-[-0.03em] animate-badge-in">
-                  {state.eligibleAmount}
-                </p>
-                <p className="text-[16px] font-normal text-black/55">
-                  {mockEligibleRange(state.propertyValue)}
-                </p>
-                <div className="mt-4">
-                  <BankLogoStack banks={BANK_OFFERS} size="md" />
-                </div>
-              </div>
-
-              <Button onClick={handleSeeOffers}>
-                {offersOpen ? "View bank offers again" : "See bank offers"}
-              </Button>
-            </div>
-          )}
-        </AccordionStep>
-
-        <AccordionStep
-          step={3}
           title="Compare bank offers"
           summary={offersOpen && !state.searchingOffers ? offersSummary : undefined}
           open={openStep === 3}

@@ -12,11 +12,11 @@ import { TrackScreen, VerifyChecklistScreen } from "@/components/screens/LoanHub
 import { StateMachineNav } from "@/components/StateMachineNav";
 
 const sheetTitle: Record<string, string> = {
-  discover: "Check eligibility",
-  apply: "Add Personal details",
-  kyc: "Complete KYC",
-  verify: "Verify loan",
-  track: "Track loan",
+  discover: "Find Loan Offers",
+  apply: "Complete Application",
+  kyc: "Verify Identity",
+  verify: "Bank Review",
+  track: "Loan Status",
 };
 
 function PhoneFrame({ children }: { children: ReactNode }) {
@@ -30,29 +30,29 @@ function PhoneFrame({ children }: { children: ReactNode }) {
   ];
 
   return (
-    <div className="app-canvas relative flex h-[100dvh] w-full flex-col overflow-hidden lg:h-[min(844px,calc(100dvh-3rem))] lg:max-w-[430px] lg:rounded-[28px] lg:shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_24px_64px_rgba(0,0,0,0.45)]">
+    <div className="app-canvas relative flex h-[100dvh] w-full flex-col overflow-hidden lg:h-[min(844px,calc(100dvh-3rem))] lg:max-w-[430px] lg:rounded-[28px] lg:shadow-[0_0_0_3px_rgba(255,255,255,0.08),0_24px_64px_rgba(0,0,0,0.45)]">
       <a
         href="#main-content"
         className="sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-full focus:bg-black focus:px-4 focus:py-1 focus:text-[16px] focus:font-semibold focus:text-white focus:outline-none focus:ring-2 focus:ring-lime"
       >
         Skip to main content
       </a>
-      <header className="app-glass z-30 flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-4">
+      <header className="z-30 flex h-12 shrink-0 items-center justify-between bg-black px-4">
         <button
           type="button"
           onClick={() => goTo("overview", "loan")}
-          className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
+          className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime"
           aria-label="AAMPAY home"
         >
-          <span className="text-[16px] font-semibold tracking-[0.22em] text-text" aria-hidden="true">
-            AAM<span className="text-black">PAY</span>
+          <span className="text-[16px] font-semibold tracking-[0.22em] text-white" aria-hidden="true">
+            AAM<span className="text-lime">PAY</span>
           </span>
         </button>
         <button
           type="button"
           onClick={() => goTo("help", "help")}
           aria-label="Notifications"
-          className="flex h-11 w-11 items-center justify-center rounded-full text-text-secondary transition hover:bg-black/5 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
+          className="flex h-11 w-11 items-center justify-center rounded-full text-white/70 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
             <path
@@ -74,9 +74,7 @@ function PhoneFrame({ children }: { children: ReactNode }) {
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <main
           id="main-content"
-          className={`min-h-0 flex-1 overflow-y-auto overscroll-contain bg-transparent ${
-            sheetOpen ? "" : "pb-[calc(3.75rem+env(safe-area-inset-bottom,0px))]"
-          }`}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-black"
         >
           {children}
         </main>
@@ -141,7 +139,7 @@ function PhoneFrame({ children }: { children: ReactNode }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-bg lg:bg-[#212121]">
+    <div className="flex h-[100dvh] overflow-hidden bg-bg lg:bg-black">
       {/* Desktop-only journey debugger — hidden on mobile & tablet */}
       <div className="hidden min-h-0 w-[min(380px,36vw)] shrink-0 lg:flex lg:flex-col">
         <StateMachineNav />

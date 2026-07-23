@@ -2,14 +2,22 @@
 
 import type { ReactNode } from "react";
 
-export function ProgressBar({ value, label }: { value: number; label?: string }) {
+export function ProgressBar({
+  value,
+  label,
+  valueLabel,
+}: {
+  value: number;
+  label?: string;
+  valueLabel?: string;
+}) {
   const pct = Math.max(0, Math.min(100, value));
   const active = pct > 0 && pct < 100;
   return (
     <div className="mb-4">
       <div className="mb-1 flex items-center justify-between text-[16px] font-semibold">
         <span className="text-text-secondary">{label ?? "Progress"}</span>
-        <span className={`text-text ${active ? "animate-badge-in" : ""}`}>{pct}%</span>
+        <span className={`text-text ${active ? "animate-badge-in" : ""}`}>{valueLabel ?? `${pct}%`}</span>
       </div>
       <div className="motion-progress-track h-[8px] overflow-hidden rounded-full bg-black/5">
         <div

@@ -6,13 +6,13 @@ import { usePrototype } from "@/lib/state";
 
 /** Legacy route — My Loan home is Overview with persona tabs. */
 export function LandingScreen() {
-  const { startLoan, resumeJourney, selectedBank, state } = usePrototype();
+  const { startLoan, resumeJourney, selectedBank, state, openSheet } = usePrototype();
   const hasProgress = state.loanStatus !== "not_started";
 
   if (hasProgress) {
     return (
       <Screen
-        title="My Loan"
+        title="My Loans"
         illustration={state.loanStatus === "active" ? "loan-active" : "loan-journey"}
       >
         <JourneyCard
@@ -30,13 +30,28 @@ export function LandingScreen() {
   }
 
   return (
-    <Screen title="My Loan" illustration="loan-start">
+    <Screen title="My Loans" illustration="loan-start">
       <JourneyCard
-        title="Start your home loan"
-        subtitle="See bank offers before documents."
-        cta={<Button onClick={() => startLoan("home")}>Start Home Loan</Button>}
+        title="Find the best home loan"
+        subtitle="Compare personalized offers from India's leading in 1 minute."
+        cta={
+          <Button
+            onClick={() => {
+              startLoan("home");
+              openSheet("discover");
+            }}
+          >
+            Find Loan Offers
+          </Button>
+        }
         secondaryCta={
-          <Button variant="secondary" onClick={() => startLoan("transfer")}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              startLoan("transfer");
+              openSheet("discover");
+            }}
+          >
             Transfer Existing Loan
           </Button>
         }

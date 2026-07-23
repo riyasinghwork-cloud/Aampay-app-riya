@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/Button";
 import { StatusChip } from "@/components/ui/UploadBox";
 import { Card, JourneyCard, Screen, StickyCta } from "@/components/ui/Screen";
-import { BankLogo, BankLogoStack } from "@/components/ui/BankLogo";
+import { BankLogo } from "@/components/ui/BankLogo";
 import { ProgressBar } from "@/components/ui/Sheet";
 import { TRACK_MILESTONES, BANK_OFFERS, docLabel, progressForLoanStatus, trackMilestoneTitle } from "@/lib/types";
 import { usePrototype } from "@/lib/state";
@@ -16,8 +16,8 @@ export function VerifyChecklistScreen() {
 
   return (
     <Screen
-      title="Verify loan"
-      subtitle={`Upload pending docs for ${bankName}`}
+      title="Bank Review"
+      subtitle={`Upload the documents ${bankName} needs to review your application`}
       onBack={() => goTo("overview")}
     >
       <div className="space-y-4">
@@ -25,8 +25,9 @@ export function VerifyChecklistScreen() {
           <button
             key={key}
             type="button"
+            disabled={allDone}
             onClick={() => setVerifyDoc(key)}
-            className="flex w-full items-center justify-between gap-4 rounded-[16px] border border-border bg-white px-4 py-4 text-left hover:border-black"
+            className="flex w-full items-center justify-between gap-4 rounded-[16px] border border-border bg-white px-4 py-4 text-left hover:border-black disabled:cursor-default disabled:hover:border-border"
           >
             <p className="text-[16px] font-semibold">{docLabel(key)}</p>
             <StatusChip status={status} />
@@ -42,7 +43,7 @@ export function VerifyChecklistScreen() {
             closeSheet();
           }}
         >
-          Submit verification
+          Submit for bank review
         </Button>
       </StickyCta>
     </Screen>
@@ -189,7 +190,7 @@ export function TrackScreen() {
   const { closeSheet } = usePrototype();
 
   return (
-    <Screen title="Track your loan" onBack={() => closeSheet()}>
+    <Screen title="Loan Status" onBack={() => closeSheet()}>
       <LoanTrackingPanel />
     </Screen>
   );
@@ -239,55 +240,67 @@ export function TimelineScreen() {
 }
 
 export function OverviewScreen() {
-  const { state, startLoan, openSheet, selectedBank } = usePrototype();
+  const { state, startLoan, openSheet, selectedBank, runOfferSearch } = usePrototype();
   const started = state.loanStatus !== "not_started";
-  const progress = progressForLoanStatus(state.loanStatus, state.kyc.complete);
+  const kycCaseVerified = state.kyc.case?.caseStatus === "verified" || state.kyc.complete;
+  const progress = progressForLoanStatus(state.loanStatus, kycCaseVerified);
 
   const order = ["discover", "offers", "apply", "kyc", "verify", "track", "approved", "disbursed", "active"] as const;
   const idx = (s: string) => order.indexOf(s as (typeof order)[number]);
   const at = idx(state.loanStatus);
   const trackingPhase = at >= idx("track");
+  const currentJourneyStep =
+    at >= idx("track")
+      ? 5
+      : at >= idx("verify")
+        ? 4
+        : at >= idx("kyc")
+          ? 3
+          : at >= idx("apply")
+            ? 2
+            : 1;
 
   const steps: {
     id: NonNullable<(typeof state)["sheet"]>;
     title: string;
     blurb: string;
+    lockedReason?: string;
     status: "done" | "current" | "locked";
   }[] = [
     {
       id: "discover",
-      title: "Check eligibility",
-      blurb: "Get bank offers",
-      status:
-        state.eligibilityCalculated &&
-        (state.loanStatus === "offers" || at > idx("offers") || !!state.selectedBankId)
-          ? "done"
-          : at >= idx("discover")
-            ? "current"
-            : "locked",
+      title: "Find Loan Offers",
+      blurb: state.eligibilityCalculated
+        ? "Personalized offers are ready"
+        : "Finding personalized offers",
+      status: state.selectedBankId ? "done" : at >= idx("discover") ? "current" : "locked",
     },
     {
       id: "apply",
-      title: "Add Personal details",
-      blurb: "Employment & property too",
+      title: "Complete Application",
+      blurb: "Add personal, employment and property details",
+      lockedReason: "Available after choosing a bank",
       status: at >= idx("kyc") ? "done" : state.selectedBankId ? "current" : "locked",
     },
     {
       id: "kyc",
-      title: "Complete KYC",
-      blurb: "Upload once, reuse later",
-      status: state.kyc.complete || at >= idx("verify") ? "done" : at >= idx("kyc") ? "current" : "locked",
+      title: "Verify Identity",
+      blurb: "Confirm your identity securely",
+      lockedReason: "Available after completing your application",
+      status: kycCaseVerified || at >= idx("verify") ? "done" : at >= idx("kyc") ? "current" : "locked",
     },
     {
       id: "verify",
-      title: "Verify loan",
-      blurb: "Income & property docs",
-      status: at >= idx("track") ? "done" : at >= idx("verify") || state.kyc.complete ? "current" : "locked",
+      title: "Bank Review",
+      blurb: "Your chosen bank reviews the submitted documents",
+      lockedReason: "Available after verifying your identity",
+      status: at >= idx("track") ? "done" : at >= idx("verify") || kycCaseVerified ? "current" : "locked",
     },
     {
       id: "track",
-      title: "Track loan",
-      blurb: "Approval to disbursement",
+      title: "Loan Status",
+      blurb: "Follow approval through disbursement",
+      lockedReason: "Available after bank review",
       status: state.loanStatus === "active" ? "done" : at >= idx("track") ? "current" : "locked",
     },
   ];
@@ -298,7 +311,7 @@ export function OverviewScreen() {
   }
 
   return (
-    <Screen title="My Loan" illustration={
+    <Screen title="My Loans" illustration={
       !started
         ? "loan-start"
         : trackingPhase
@@ -309,11 +322,26 @@ export function OverviewScreen() {
     }>
       {!started ? (
         <JourneyCard
-          title="Start your home loan"
-          subtitle="See bank offers before documents."
-          cta={<Button onClick={() => startLoan("home")}>Start Home Loan</Button>}
+          title="Find the best home loan"
+          subtitle="Compare personalized offers from India's leading in 1 minute."
+          cta={
+            <Button
+              onClick={() => {
+                startLoan("home");
+                openSheet("discover");
+              }}
+            >
+              Find Loan Offers
+            </Button>
+          }
           secondaryCta={
-            <Button variant="secondary" onClick={() => startLoan("transfer")}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                startLoan("transfer");
+                openSheet("discover");
+              }}
+            >
               Transfer Existing Loan
             </Button>
           }
@@ -324,7 +352,8 @@ export function OverviewScreen() {
         <>
           <ProgressBar
             value={progress}
-            label={selectedBank ? `${selectedBank.name} journey` : "Your loan journey"}
+            label="About 8 minutes remaining"
+            valueLabel={`Step ${currentJourneyStep} of 5`}
           />
 
           <div className="motion-stagger space-y-4">
@@ -333,11 +362,10 @@ export function OverviewScreen() {
               const done = step.status === "done";
               const current = step.status === "current";
               const ctaLabel: Record<string, string> = {
-                discover: "See my offers",
                 apply: "Continue",
                 kyc: "Continue",
-                verify: "Upload documents",
-                track: "View progress",
+                verify: "Upload Documents",
+                track: "View Loan Status",
               };
               return (
                 <div
@@ -350,75 +378,69 @@ export function OverviewScreen() {
                         : "border-border opacity-55"
                   }`}
                 >
-                  {done && step.id === "discover" ? (
-                    <button
-                      type="button"
-                      onClick={() => openSheet("discover")}
-                      className="flex w-full items-start gap-4 text-left"
+                  <div className="flex items-start gap-4">
+                    <span
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[16px] font-semibold ${
+                        done
+                          ? "animate-check-pop bg-lime text-black"
+                          : current
+                            ? "animate-pulse-ring bg-black text-white"
+                            : "bg-bg text-text-muted"
+                      }`}
                     >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime text-[16px] font-semibold text-black animate-check-pop">
-                        ✓
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[16px] font-semibold leading-snug">Eligibility</span>
-                        <span className="block text-[20px] font-semibold tracking-[-0.02em] text-text">
-                          {state.eligibleAmount}
-                        </span>
-                        {selectedBank ? (
+                      {done ? "✓" : i + 1}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[16px] font-semibold leading-snug">{step.title}</span>
+                      {step.id === "discover" && selectedBank ? (
+                        <span className="mt-4 block">
                           <span className="flex items-center gap-1">
-                            <span className="text-[16px] text-text-secondary">
-                              Proceeding with {selectedBank.name}
-                            </span>
-                            <BankLogo bankId={selectedBank.id} size="sm" className="ring-2 ring-lime" />
+                            <BankLogo bankId={selectedBank.id} size="sm" className="shrink-0" />
+                            <span className="text-[16px] font-semibold text-text">{selectedBank.name}</span>
                           </span>
-                        ) : (
-                          <span className="flex items-center gap-1">
-                            <span className="text-[16px] text-text-secondary whitespace-nowrap">
-                              {BANK_OFFERS.length} bank offers
-                            </span>
-                            <BankLogoStack banks={BANK_OFFERS} size="sm" />
+                          <span className="mt-1 block text-[16px] text-text-secondary">
+                            {selectedBank.amount} · {selectedBank.rate} · {selectedBank.tenure}
                           </span>
-                        )}
-                      </span>
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center text-[20px] font-semibold text-text-muted" aria-hidden>
-                        →
-                      </span>
-                    </button>
-                  ) : (
-                    <>
-                      <div className="flex items-start gap-4">
-                        <span
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[16px] font-semibold ${
-                            done
-                              ? "animate-check-pop bg-lime text-black"
-                              : current
-                                ? "animate-pulse-ring bg-black text-white"
-                                : "bg-bg text-text-muted"
-                          }`}
-                        >
-                          {done ? "✓" : i + 1}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[16px] font-semibold leading-snug">{step.title}</span>
-                          <span className="block text-[16px] text-text-secondary">{step.blurb}</span>
-                        </span>
-                        {done && (
+                          <span className="block text-[16px] text-text-muted">
+                            Processing fee {selectedBank.fees}
+                          </span>
                           <button
                             type="button"
-                            onClick={() => openSheet(step.id)}
-                            className="flex h-7 w-7 shrink-0 items-center justify-center text-[20px] font-semibold text-text-muted"
-                            aria-label={`Review ${step.title}`}
+                            onClick={runOfferSearch}
+                            className="mt-1 text-[16px] font-semibold text-black underline underline-offset-4"
                           >
-                            →
+                            Change bank
                           </button>
-                        )}
-                      </div>
-                      {current && (
-                        <Button className="mt-4" onClick={() => openSheet(step.id)} disabled={locked}>
-                          {ctaLabel[step.id]}
-                        </Button>
+                        </span>
+                      ) : (
+                        <span className="block text-[16px] text-text-secondary">
+                          {locked ? step.lockedReason ?? step.blurb : step.blurb}
+                        </span>
                       )}
-                    </>
+                    </span>
+                    {done && step.id !== "discover" && (
+                      <button
+                        type="button"
+                        onClick={() => openSheet(step.id)}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center text-[20px] font-semibold text-text-muted"
+                        aria-label={`Review ${step.title}`}
+                      >
+                        →
+                      </button>
+                    )}
+                  </div>
+                  {current && step.id === "discover" && (
+                    <Button
+                      className="mt-4"
+                      onClick={state.eligibilityCalculated ? runOfferSearch : () => openSheet("discover")}
+                    >
+                      {state.eligibilityCalculated ? "Select a bank offer" : "Find Loan Offers"}
+                    </Button>
+                  )}
+                  {current && step.id !== "discover" && (
+                    <Button className="mt-4" onClick={() => openSheet(step.id)} disabled={locked}>
+                      {ctaLabel[step.id]}
+                    </Button>
                   )}
                 </div>
               );

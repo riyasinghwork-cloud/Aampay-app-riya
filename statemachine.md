@@ -57,8 +57,8 @@ Sibling branches (Resident vs NRI, home vs transfer) share the same loan status 
 | `User.Loan.Journey.verify` | Overview step `verify` | Title: Verify loan | CTA **Upload documents** | Sheet `verify` | **current** if status≥verify OR `kyc.complete` |
 | `User.Loan.Journey.track` | Overview step `track` | Title: Track loan | CTA **View progress** | Sheet `track` (rarely used once inline tracking shows) | Hidden as list when tracking phase; **done** only at `active` |
 | `User.Loan.Journey.empty` | `loanStatus=not_started` | — | Start Home Loan / Transfer | → `startLoan` | JourneyCard: title + subtitle + two CTAs (no “Choose a path” filler) |
-| `User.Resident.Loan.*` | Same journey as NRI | `residency=resident` | — | KYC docs: pan, aadhaar, selfie | Address: India only; Compliance: India tax resident + PEP + bureau |
-| `User.NRI.Loan.*` | Same journey as Resident | `residency=nri` | — | KYC docs: passport, visa, pan, selfie (+ optional oci, labour_card) | Address: overseas + India; Compliance: FATCA/CRS + tax country + TIN + PEP + bureau |
+| `User.Resident.Loan.*` | Same journey as NRI | `residency=resident` | — | KYC docs: aadhaar, pan, selfie, address_proof, income_proof | Address: India only; Risk step: India tax + PEP + bureau |
+| `User.NRI.Loan.*` | Same journey as Resident | `residency=nri` | — | KYC docs: passport, visa, pan, selfie, address_proof, income_proof (+ optional oci, labour_card) | Address: overseas + India; Risk: FATCA/CRS + tax country + TIN + PEP + bureau |
 | `User.Loan.Discover` | Sheet `discover` | Accordion steps 1–3 | Close sheet → overview | Hosted in AppShell | Title: Check eligibility / Transfer offers |
 | `User.Loan.Discover.step1_details` | Open by default until calculated | `residency`, `country`, `propertyValue`, `annualIncome`, `occupation` | **Calculate eligibility** | → `submitDiscover`: sets residency/occupation defaults, `eligibleAmount=mockEligibleAmount`, `eligibilityCalculated=true`, `loanStatus=discover`, sheet stays discover; UI opens step 2 | Transfer label: “Property value / outstanding” |
 | `User.Loan.Discover.step2_eligibility` | Locked until calculated \| calculating | `eligibleAmount`, range string | **See bank offers** / View again | → `runOfferSearch`: `loanStatus=offers`, `searchingOffers=true` → false @900ms; opens step 3 | Card: amount + `mockEligibleRange` + horizontal bank logo stack |
@@ -71,36 +71,26 @@ Sibling branches (Resident vs NRI, home vs transfer) share the same loan status 
 | `User.Loan.Apply.step2_employment` | Locked until personal done | `employment.{employer,designation,experience}` | Continue → employment done, open 3 | — | — |
 | `User.Loan.Apply.step3_property` | Locked until employment done | `property.{city,type,stage}` | Review application → property done, open 4 | — | — |
 | `User.Loan.Apply.step4_review` | Locked until property done | Read-only Bank, Name, Email, Employer, Property, Amount | **Submit application** | → `loanStatus=kyc`, `closeSheet()` | Does not auto-open KYC sheet |
-| `User.Loan.KYC` | Sheet `kyc`; `loanStatus=kyc` | Nested `kyc` object | Accordion 1–6 + StateMachineNav edge leaves | Residency via SM nav / Discover — **no in-sheet tabs** | Full edge inventory in rows below |
-| `User.Loan.KYC.already_verified_skip` | KYC-0 | Identity+mobile+email done | Opens docs step with DigiLocker-linked docs | SM: `…KYC.already_verified_skip` |
-| `User.Loan.KYC.step1` | Identity | `identityPhase`, DigiLocker flags/consents, `identityPanDraft`, `identityNameMismatch` | DigiLocker or Manual | AppState-backed for SM jumps |
-| `…step1.intro` | Choice | DigiLocker vs Manual | — | |
-| `…step1.digilocker.redirect` | Redirect | Auto → consent | — | |
-| `…step1.digilocker.consent` / `consent_incomplete` | Consents on/off | Allow gated | — | |
-| `…step1.digilocker.fetching` | Fetch | Auto → results | — | |
-| `…step1.digilocker.pan_missing` / `aadhaar_missing` / `both_missing` / `results_both_found` | DigiLocker results variants | Branch by found docs | — | |
-| `…step1.digilocker.pan_found` / `name_mismatch` | Confirm PAN | → OTP or manual Aadhaar | Name mismatch warns delay | |
-| `…step1.digilocker.aadhaar_otp` / `aadhaar_otp_pan_missing` | Aadhaar OTP | → done or pan_missing | — | |
-| `…step1.digilocker.done` / `manual.done` | Both verified | Continue → Mobile | — | |
-| `…step1.pan_missing` | Aadhaar OK · PAN missing | Manual PAN | — | |
-| `…step1.manual.pan` / `pan_invalid` / `aadhaar` | Manual entry | Format gate; under_review | — | |
-| `…step1.manual.under_review` / `pan_pending_aadhaar_ok` | Pending variants | Simulate / Continue while pending | — | |
-| `…step2.continue_while_pending` | Mobile + pending identity | OTP | — | |
-| `…step2.otp_empty` / `otp_partial` / `otp_ready` / `verified` | OTP states | Verify needs 6 digits | — | |
-| `…step3.verified` / `pending` / `otp_ready` | Email verified or OTP UI | Pending → verify email | — | |
-| `…step3.mobile_already_verified_skip` | Skip mobile OTP | Email step | — | |
-| `…step4.docs_empty` / `partial` / `uploaded` / `digilocker_linked` / `under_review_labels` | Doc batch states | Continue when required satisfy | rejected/expired block | |
-| `…step4.doc_rejected` / `doc_expired` | Re-upload | Tap → uploaded | PRD | |
-| `…step4.selfie_capture` | Live selfie | `SelfieCapturePage` wired | — | |
-| `…step4.locked` | Mobile pending | Accordion locked | — | |
-| `…step4.doc.{key}` | Single required doc | Per residency keys | — | |
-| `…step4.form60` / `form60_complete` / `optional_docs` | NRI only | Form 60 / OCI / labour | — | |
-| `…step5.resident` / `nri` / `empty` / `india_empty` / `overseas_empty` | Address | Confirm disabled until filled | — | |
-| `…step6.resident` / `nri_fatca` / `tin_filled` | Compliance | Submit → KYC-7 summary | — | |
-| `…step6.summary` | KYC-7 | Continue → verify | Stays on sheet until continue | |
-| `…step6.complete` | After continue | `loanStatus=verify` | — | |
-| `User.Loan.Verify` | Sheet `verify`; `loanStatus=verify` | `verifyDocs` map | Tap row cycles status; **Submit verification** | → `loanStatus=track`, `trackStep=0`, closeSheet | Submit enabled if every doc ∈ {uploaded, under_review, accepted} |
-| `User.Loan.Verify.doc.salary_slips` | DocStatus | Key `salary_slips` | `setVerifyDoc` | 4-state cycle | Label: Salary slips (last 3 months) |
+| `User.Loan.KYC` | Sheet `kyc`; `loanStatus=kyc` | Nested `kyc` + **`kyc.case` KYC Case** | Accordion 1–8 + StateMachineNav | Residency via SM nav — **no in-sheet tabs** | **loanStatus ≠ caseStatus**; only `caseStatus=verified` unlocks underwriting |
+| `User.Loan.KYC.Case` | Parallel domain | See § KYC Case below | Orchestration mutators | Terminals: verified / rejected / expired / withdrawn | Income proof is part of KYC docs |
+| `User.Loan.KYC.already_verified_skip` | KYC-0 | Identity+mobile+email done | Opens docs with DigiLocker-linked docs | SM: `…KYC.already_verified_skip` |
+| `User.Loan.KYC.step1` | Identity + CKYC | `identityPhase`, DigiLocker, CKYC/API edges | DigiLocker / Manual / CKYC reuse | AppState + `kyc.case` |
+| `…step1.intro` … `manual.*` | DigiLocker/manual ladder | Existing phases | — | |
+| `…step1.ckyc.found` | Existing CKYC | `case.ckyc.status=found` | Use CKYC identity | |
+| `…step1.api_outage` | Third-party outage | `case.apiOutage` | Retry / manual | |
+| `…step1.aadhaar.otp_expired` | OTP expired | `case.aadhaarOtpExpired` | Resend | |
+| `…step1.pan.duplicate` | Duplicate PAN | `case.duplicatePan` | Enter different PAN | |
+| `…step1.consent.expired` | Consent expired | `case.consent=expired` | Resume | |
+| `…step2.*` / `…step3.*` | Mobile / Email OTP | Unchanged | — | |
+| `…step4.docs_*` | Documents + OCR | Required includes **address_proof**, **income_proof** | OCR processing / low confidence / blurry | Resident: aadhaar,pan,selfie,address_proof,income_proof · NRI: passport,visa,pan,selfie,address_proof,income_proof |
+| `…step4.ocr_*` / `blurry` | OCR edges | `case.docMeta` | Tap to finish OCR / reupload | |
+| `…step5.face_*` | Face & liveness | `case.face.phase` | Capture → liveness → match | mismatch / deepfake fail |
+| `…step6.video_*` | Video KYC ladder | `case.video.phase` | Advance / interrupt / reject | |
+| `…step7.address_*` | Address | India (+ overseas NRI) | Confirm → step 8 | Locked until video approved |
+| `…step8.risk_*` | Risk / AML / manual review | `case.risk`, `manualReview` | Low/med/high/sanctions/fraud; reviewer actions | |
+| `…step8.verified` / `rejected` / `expired` / `withdrawn` | Terminals | `case.caseStatus` | Continue / Resume / Back | Verified → unlock verify |
+| `User.Loan.Verify` | Sheet `verify`; `loanStatus=verify` | `verifyDocs` map | Tap row cycles status; **Submit verification** | → `loanStatus=track`, `trackStep=0`, closeSheet | Gated by KYC Case **verified** (not merely loanStatus=kyc) |
+| `User.Loan.Verify.doc.salary_slips` | DocStatus | Key `salary_slips` | `setVerifyDoc` | 4-state cycle | Label: Salary slips (last 3 months) — loan underwriting docs (separate from KYC income_proof) |
 | `User.Loan.Verify.doc.bank_statements` | DocStatus | Key `bank_statements` | Same | Same | Bank statements (6 months) |
 | `User.Loan.Verify.doc.property_docs` | DocStatus | Key `property_docs` | Same | Same | Property documents |
 | `User.Loan.Verify.doc.credit_consent` | DocStatus | Key `credit_consent` | Same | Same | Credit bureau consent |
@@ -121,15 +111,116 @@ Sibling branches (Resident vs NRI, home vs transfer) share the same loan status 
 | `Profile.property` | Section | city, type, stage, propertyValue | Edit | `patchProperty` / `setField` | — |
 | `Profile.eligibilityBank` | Section | residency, country, eligibleAmount; RO bank name/rate | Edit | `setField` | Changing residency via Profile **does not** prune docs (unlike `setResidency`) |
 | `Profile.addressesTax` | Section | indiaAddress; NRI overseas/tax/TIN; mobile/email verified flags | Edit | `patchKyc` | — |
-| `Profile.docs.identity` | List | KYC doc keys for residency | Tap cycles `setKycDoc` | Shown if docs exist or KYC complete | — |
+| `Profile.docs.identity` | List | KYC doc keys for residency | Tap cycles `setKycDoc` | Shown if docs exist or KYC complete | Reusable identity at profile level |
 | `Profile.docs.verify` | List | verifyDocs | Tap cycles `setVerifyDoc` | Shown if any verify started OR status ∈ verify\|track\|approved\|disbursed\|active | — |
 | `Profile.settings` | Stub | — | — | — | “Notifications & preferences” single line |
 | `Help` | `nav=help` | — | FAQ / RM / ticket stubs | Notification deep-link | If KYC incomplete and status kyc\|apply → `goTo("kyc_check")` (renders Overview); if verify → `verify_checklist` (Overview); else overview — **does not open sheets** |
-| `DocMachine.kyc` | Toggle | per key in `kyc.docs` | `setKycDoc(key)` or `setKycDoc(key, status)` | not_started ↔ uploaded | Explicit status used when selfie confirm wired |
+| `DocMachine.kyc` | Toggle + OCR meta | per key in `kyc.docs` + `case.docMeta` | `setKycDoc(key)` | not_started ↔ uploaded (+ seedable review/reject/expire) | Explicit status used when selfie confirm wired |
 | `DocMachine.verify` | Cycle | per key in `verifyDocs` | `setVerifyDoc(key)` | 4-state loop | Accepted not required to submit (uploaded/under_review OK) |
-| `Persona.new` | Loadable snapshot | `PERSONA_PRESETS.new` ≈ initialState | Overview tab New | Full replace | `loanStatus=not_started` |
-| `Persona.mid` | Loadable snapshot | home + nri + salaried; eligibility done; bank hdfc; shortlist hdfc,sbi; `loanStatus=kyc`; mobile+email verified; passport uploaded; visa/pan/selfie not started | Overview tab In progress | Full replace | Mid-KYC NRI |
-| `Persona.done` | Loadable snapshot | `loanStatus=active`, `trackStep=6`; KYC complete; all KYC+verify docs uploaded/accepted; foreignTin set | Overview tab Completed | Full replace | Shows active tracking UI |
+| `Persona.new` | Loadable snapshot | `PERSONA_PRESETS.new` ≈ initialState | Overview tab New | Full replace | `loanStatus=not_started`; `case=draft` |
+| `Persona.mid` | Loadable snapshot | home + nri + salaried; eligibility done; bank hdfc; `loanStatus=kyc`; mid docs | Overview tab In progress | Full replace | Mid-KYC NRI; `case=in_progress` |
+| `Persona.done` | Loadable snapshot | `loanStatus=active`, `trackStep=6`; KYC Case **verified**; all docs accepted | Overview tab Completed | Full replace | Shows active tracking UI |
+
+---
+
+## KYC Case (comprehensive) — mirrors `Home_Loan_KYC_Complete_State_Machine.md`
+
+### Goal
+
+Verified customer eligible to proceed to underwriting.  
+**Terminal outcomes:** `verified` · `rejected` · `expired` · `withdrawn`.
+
+### Actors (simulated)
+
+Customer · Loan Officer · Operations Reviewer · OCR · PAN API · Aadhaar API · CKYC Registry · AML/Sanctions · Fraud · Face/Liveness AI · Notification · Scheduler/Timeout · Audit.
+
+### Domains / entity tree
+
+```
+Home Loan Application
+└── Customer (profile, contact, address)
+└── KYC Case                          ← kyc.case (independent of loanStatus)
+    ├── Identity (PAN, Aadhaar, Name, DOB, CKYC)
+    ├── Documents (PAN, Aadhaar/Passport, Address proof, Income proof, Selfie)
+    ├── Consent
+    ├── Face Verification
+    ├── Video KYC
+    ├── Risk Assessment
+    ├── Manual Review
+    └── Audit Trail
+```
+
+**Relationships:** Customer owns Loan Application → owns KYC Case. Case aggregates Identity/Docs/Consent/Face/Video/Risk. Risk can block approval. **Approval unlocks underwriting** (`loanStatus → verify`).
+
+### Parallel lifecycles (`kyc.case`)
+
+| Lifecycle | States |
+|---|---|
+| Documents | not_started → uploaded → OCR (`docMeta.processing`) → validation → accepted / reupload (`rejected`/`expired`/blurry/low OCR) |
+| PAN | not_submitted → submitted → verifying → verified / failed |
+| Aadhaar | not_submitted → otp_sent → otp_verified → verified / failed |
+| Consent | pending → accepted → recorded → expired |
+| Face | waiting → selfie → liveness → match → passed / failed |
+| Video | not_scheduled → scheduled → connected → recording → review → approved / rejected (+ interrupted) |
+| Risk | not_started → running → low/medium/high → manual_review → cleared / rejected |
+| Case | draft → in_progress → manual_review → **verified \| rejected \| expired \| withdrawn** |
+
+### Master orchestration
+
+```
+Draft → Collect Documents → Verify Identity (PAN/Aadhaar/CKYC)
+  → Validate Documents → Face → Video KYC → Risk
+    → Auto Approve → VERIFIED
+    → Manual Review → Approved / Reupload / Rejected
+    → Timeout → EXPIRED
+    → Customer Cancel → WITHDRAWN
+```
+
+### Events & mutators
+
+| Actor | Events | Prototype API |
+|---|---|---|
+| Customer | Upload, Retake, Retry OTP, Submit, Resume, Cancel | `setKycDoc`, `resumeKycCase`, `withdrawKycCase`, Submit KYC Case |
+| System | OCR complete, API success/fail, Timeout, Risk calculated | `patchKycCase`, `runRiskAssessment`, `expireKycCase` |
+| Reviewer | Approve, Reject, Reupload, Escalate | `reviewerAction` |
+
+### Guards (`kycApprovalReady`)
+
+Submission / approval requires: active session · valid consent · PAN verified · Aadhaar verified · docs OK · face passed · video approved · AML clear · sanctions clear · fraudScore &lt; 70 · risk cleared/low **or** manual review approved.
+
+### Edge cases (StateMachineNav seeds via `deepKycCase`)
+
+Blurry document · OCR low confidence · Duplicate PAN · Aadhaar OTP expired · API outage · Face mismatch · Deepfake · Video interrupted · Session/consent timeout · Existing CKYC · Sanctions hit · Resume · Withdraw.
+
+### Error classes
+
+`validation` · `business_rule` · `third_party` · `network` · `security` · `fraud` · `unknown` — stored on `case.lastErrorClass` / `lastReasonCode`.
+
+### Recovery
+
+Retry · Resume · Reupload · Manual Review · Escalate · Cancel/Withdraw.
+
+### Side effects / observability
+
+Each transition may append `KycAuditEvent` (`actor`, `event`, `fromState`, `toState`, `timestamp`, `reasonCode`, `correlationId`). Case carries `caseId`, `correlationId`.
+
+### Product choices (deliberate)
+
+1. **Income proof is part of KYC Documents** (`income_proof`), not only loan verification.
+2. **All services are simulated** (OCR, CKYC, face, video, AML).
+3. **KYC Case status is independent from `loanStatus`**; loan stays `kyc` until Continue after VERIFIED.
+4. **Reusable identity remains profile-level** (`kyc.docs` + verified flags).
+
+### UI mapping
+
+| UI | File |
+|---|---|
+| Accordion 1–8 | `KycScreens.tsx` |
+| DigiLocker / CKYC / OTP / outage | `IdentityCheckFlow.tsx` |
+| Face + liveness + match | `SelfieCapturePage.tsx` |
+| OCR / blurry / reupload | `UploadBox.tsx` + `case.docMeta` |
+| Deep seeds | `kycNavSeeds.ts` → `stateMachineNav.ts` |
+| Case / risk chips | `StateMachineNav.tsx` |
 
 ---
 
@@ -153,22 +244,30 @@ Sibling branches (Resident vs NRI, home vs transfer) share the same loan status 
 | `employment.*` | strings | `patchEmployment` |
 | `property.*` | strings | `patchProperty` |
 | `kyc.mobileVerified` | `boolean` | KYC Verify |
-| `kyc.emailVerified` | `boolean` | Initial **true**; not toggled in happy path |
-| `kyc.identityVerified` | `boolean` | Docs Continue; cleared by `setResidency`; `markKycComplete` |
-| `kyc.addressVerified` | `boolean` | Address Confirm; `markKycComplete` |
-| `kyc.complianceDone` | `boolean` | `markKycComplete` only |
-| `kyc.complete` | `boolean` | `markKycComplete` |
+| `kyc.emailVerified` | `boolean` | Initial **true**; email OTP when pending |
+| `kyc.identityVerified` | `boolean` | Docs Continue; cleared by `setResidency` |
+| `kyc.addressVerified` | `boolean` | Address Confirm |
+| `kyc.complianceDone` | `boolean` | Risk step / submit |
+| `kyc.complete` | `boolean` | Set with Case `verified` |
 | `kyc.docs` | `Record<string, DocStatus>` | `setKycDoc`; pruned by `setResidency` |
+| `kyc.case` | `KycCaseState` | `patchKycCase`, orchestration helpers, SM deep seeds |
+| `kyc.case.caseStatus` | `KycCaseStatus` | submit / reject / expire / withdraw / reviewer |
+| `kyc.case.panLifecycle` / `aadhaarLifecycle` | enums | Identity flow |
+| `kyc.case.consent` | ConsentLifecycle | Accept / expire / resume |
+| `kyc.case.face` / `video` / `risk` / `ckyc` / `manualReview` | nested | Face / Video / Risk UIs |
+| `kyc.case.docMeta` | `Record<string, DocMeta>` | OCR / blurry |
+| `kyc.case.auditTrail` | `KycAuditEvent[]` | Appended on transitions |
 | `kyc.indiaAddress` / `overseasAddress` | `string` | Address / Profile |
 | `kyc.taxCountry` / `foreignTin` | `string` | Compliance / Profile |
 | `kyc.useForm60` | `boolean` | NRI docs checkbox |
-| `kyc.identityPhase` | `IdentityPhase` | DigiLocker / manual subflow; StateMachineNav seeds |
+| `kyc.identityPhase` | `IdentityPhase` | DigiLocker / manual / CKYC / outage |
 | `kyc.panInDigilocker` / `aadhaarInDigilocker` | `boolean` | DigiLocker document presence |
 | `kyc.digilockerConsentUidai` / `digilockerConsentPan` | `boolean` | Consent checkboxes |
 | `kyc.identityPanDraft` | `string` | Manual / DigiLocker PAN field |
 | `kyc.identityNameMismatch` | `boolean` | PAN confirm name mismatch warning |
 | `kyc.selfieCaptureOpen` | `boolean` | Live selfie capture UI |
 | `kyc.emailOtp` | `string` | Email pending verification |
+| `kycStep` | `1…8` | Accordion open step |
 | `verifyDocs.*` | `DocStatus` | `setVerifyDoc` |
 | `loanStatus` | `LoanStatus` | Journey mutators + `advanceTrack` |
 | `trackStep` | `0…6` | Verify submit → 0; `advanceTrack` |
@@ -187,24 +286,46 @@ flowchart TD
   discover -->|submitDiscover| discoverCalc[discover eligibilityCalculated]
   discoverCalc -->|runOfferSearch| offers[offers]
   offers -->|selectBank| apply[apply]
-  apply -->|Submit application| kyc[kyc]
-  kyc -->|markKycComplete| verify[verify]
+  apply -->|Submit application| kyc[loanStatus kyc]
+  kyc -->|Case VERIFIED| caseOk[caseStatus verified]
+  caseOk -->|Continue to loan verification| verify[verify]
   verify -->|Submit verification trackStep0| track[track]
   track -->|advanceTrack to 3| approved[approved]
   approved -->|advanceTrack to 5| disbursed[disbursed]
   disbursed -->|advanceTrack to 6| active[active]
 ```
 
+### KYC Case terminals (independent of loanStatus)
+
+```mermaid
+stateDiagram-v2
+  [*] --> draft
+  draft --> in_progress: submit / collect
+  in_progress --> manual_review: medium/high risk
+  in_progress --> verified: guards pass
+  manual_review --> verified: reviewer approve
+  manual_review --> in_progress: reupload
+  manual_review --> rejected: reviewer reject
+  in_progress --> rejected: sanctions / fraud
+  in_progress --> expired: timeout
+  in_progress --> withdrawn: customer cancel
+  expired --> in_progress: resume
+  withdrawn --> in_progress: resume
+```
+
 ### Canonical transition cheat sheet
 
-| Trigger | From (typical) | To `loanStatus` | Sheet / side effects |
+| Trigger | From (typical) | To `loanStatus` / Case | Sheet / side effects |
 |---|---|---|---|
 | `startLoan(type)` | `not_started` | `discover` | `loanType` set; persona → mid; sheet null |
 | `submitDiscover` | `discover` | `discover` | eligibility calc; sheet `discover` |
 | `runOfferSearch` | `discover` | `offers` | searching 900ms; sheet `discover` |
 | `selectBank(id)` | `offers` | `apply` | bank selected; sheet null |
 | Apply Submit | `apply` | `kyc` | closeSheet |
-| `markKycComplete` | `kyc` | stays `kyc` | Flags true; sheet stays on step 6 summary (KYC-7); Continue → `verify` |
+| Submit KYC Case (guards pass) | `kyc` | stays `kyc`; **case=verified** | Step 8 terminal; Continue → `verify` |
+| `markKycComplete` (guards fail) | `kyc` | stays `kyc`; **case=manual_review** | Step 8 review queue |
+| `expireKycCase` / `withdrawKycCase` | `kyc` | stays `kyc`; expired/withdrawn | Resume CTA |
+| `reviewerAction(approved)` | manual_review | verified | Unlock underwriting CTA |
 | Verify Submit | `verify` | `track` | `trackStep=0`; closeSheet |
 | `advanceTrack` | `track`… | `approved` @≥3 / `disbursed` @≥5 / `active` @≥6 | `trackStep++`; persona done at 6 |
 | `loadPersona` / `reset` | * | preset | Full state replace |
@@ -214,11 +335,14 @@ flowchart TD
 ## Implementation notes for backend engineers
 
 1. **Sheets vs routes:** Treat journey steps as a **state machine + modal/sheet**, not separate deep links. Overview is always the loan hub.
-2. **KYC reusable identity:** Persist `kyc.*` and identity docs at user level; loan-specific verify docs stay on the loan application.
-3. **KYC identity phases:** `kyc.identityPhase` + `panInDigilocker` + `identityPanDraft` drive DigiLocker/manual simulation; StateMachineNav leaves under `User.{residency}.Loan.{type}.KYC.step*` seed these for demos.
-4. **Residency switch:** Must redefine required document set and invalidate identity verification (prototype prunes docs). Switch via left StateMachineNav (Resident Indian / NRI), not an in-sheet tab.
-5. **Email:** Product assumes pre-verified email in this prototype — do not model OTP for email unless product changes.
-6. **Mobile OTP:** Verify CTA disabled until 6 digits (prototype accepts any digits).
-7. **Selfie:** Prefer a dedicated capture sub-state (camera permission → preview → confirm). Component exists; wire to `kyc.docs.selfie=uploaded` on confirm.
-8. **Tracking:** After verify submit, loan hub becomes status/EMI surface; application checklist is no longer primary.
-9. **Personas:** `new` / `mid` / `done` are demo loaders, not production concepts — map to empty / in-progress / funded application fixtures in staging.
+2. **KYC Case vs loan status:** Persist Case status separately; do not equate `loanStatus=kyc` with Case verified. Underwriting unlocks only on Case `verified`.
+3. **KYC reusable identity:** Persist `kyc.*` and identity docs at user level; loan-specific verify docs stay on the loan application. Income proof lives on the Case/documents set.
+4. **Parallel lifecycles:** Model PAN, Aadhaar, docs/OCR, consent, face, video, and risk as concurrent state machines coordinated by Case orchestration + guards.
+5. **KYC identity phases:** `kyc.identityPhase` + DigiLocker flags + `kyc.case` edges (CKYC, OTP expiry, outage, duplicate PAN) drive simulation; StateMachineNav leaves under `User.{residency}.Loan.{type}.KYC.step*` seed coherent deep case state via `deepKycCase`.
+6. **Residency switch:** Must redefine required document set (incl. address/income proof) and invalidate identity verification (prototype prunes docs). Switch via left StateMachineNav (Resident Indian / NRI), not an in-sheet tab.
+7. **Email / Mobile OTP:** Email may already be verified; mobile Verify disabled until 6 digits (prototype accepts any digits).
+8. **Selfie / face:** Capture → liveness → face-match sub-state; failures support retake; deepfake/mismatch are fraud/validation errors.
+9. **Video KYC:** Explicit ladder including interruption; approval required before address/risk completion in the prototype accordion.
+10. **Tracking:** After verify submit, loan hub becomes status/EMI surface; application checklist is no longer primary.
+11. **Personas:** `new` / `mid` / `done` are demo loaders — map to empty / in-progress / funded fixtures; `done` includes Case `verified`.
+12. **Audit:** Append immutable events for every Case transition (actor, from→to, reason, correlation id).

@@ -2,19 +2,28 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import type { FacePhase } from "@/lib/types";
+
+type CaptureStage = "camera" | "liveness" | "match" | "passed" | "failed";
 
 export function SelfieCapturePage({
   onBack,
   onComplete,
+  onFacePhase,
+  forceOutcome,
 }: {
   onBack: () => void;
-  onComplete: () => void;
+  onComplete: (result: { passed: boolean; score: number; deepfake?: boolean; mismatch?: boolean }) => void;
+  onFacePhase?: (phase: FacePhase) => void;
+  /** Seedable demo outcome from StateMachineNav */
+  forceOutcome?: "pass" | "mismatch" | "deepfake" | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [snapshot, setSnapshot] = useState<string | null>(null);
+  const [stage, setStage] = useState<CaptureStage>("camera");
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -50,13 +59,13 @@ export function SelfieCapturePage({
       }
     }
 
-    if (!snapshot) start();
+    if (!snapshot && stage === "camera") start();
 
     return () => {
       cancelled = true;
       stopCamera();
     };
-  }, [snapshot, stopCamera]);
+  }, [snapshot, stage, stopCamera]);
 
   const capture = () => {
     const video = videoRef.current;
@@ -74,16 +83,41 @@ export function SelfieCapturePage({
         return;
       }
     }
-    // Demo fallback when camera denied
     setSnapshot("demo");
     stopCamera();
   };
 
-  const retake = () => setSnapshot(null);
+  const retake = () => {
+    setSnapshot(null);
+    setStage("camera");
+    onFacePhase?.("selfie");
+  };
+
+  const runLivenessAndMatch = () => {
+    setStage("liveness");
+    onFacePhase?.("liveness");
+    window.setTimeout(() => {
+      setStage("match");
+      onFacePhase?.("match");
+          window.setTimeout(() => {
+            const outcome = forceOutcome ?? "pass";
+            if (outcome === "mismatch") {
+              setStage("failed");
+              onFacePhase?.("failed");
+            } else if (outcome === "deepfake") {
+              setStage("failed");
+              onFacePhase?.("failed");
+            } else {
+              setStage("passed");
+              onFacePhase?.("passed");
+            }
+          }, 900);
+    }, 900);
+  };
 
   const confirm = () => {
     stopCamera();
-    onComplete();
+    runLivenessAndMatch();
   };
 
   return (
@@ -100,15 +134,53 @@ export function SelfieCapturePage({
       </button>
 
       <div>
-        <h2 className="text-[20px] font-semibold tracking-[-0.02em]">Live selfie</h2>
+        <h2 className="text-[20px] font-semibold tracking-[-0.02em]">
+          {stage === "liveness"
+            ? "Liveness check"
+            : stage === "match"
+              ? "Face match"
+              : stage === "passed"
+                ? "Face verified"
+                : stage === "failed"
+                  ? "Face check failed"
+                  : "Live selfie"}
+        </h2>
         <p className="text-[16px] text-text-secondary">
-          Center your face in good light. JPG or PNG from camera.
+          {stage === "liveness"
+            ? "Simulating blink / turn-head liveness…"
+            : stage === "match"
+              ? "Matching selfie to identity photo…"
+              : stage === "failed"
+                ? "Retake selfie or escalate to Video KYC."
+                : "Center your face in good light. JPG or PNG from camera."}
         </p>
       </div>
 
       <div className="relative aspect-[3/4] overflow-hidden rounded-[20px] bg-black">
-        {snapshot && snapshot !== "demo" ? (
-          // Captured frame from getUserMedia
+        {stage === "liveness" || stage === "match" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 bg-neutral-900 px-8 text-center text-white">
+            <div className="h-12 w-12 animate-pulse-soft rounded-full bg-lime" />
+            <p className="text-[16px] font-semibold">
+              {stage === "liveness" ? "Checking liveness…" : "Running face match…"}
+            </p>
+          </div>
+        ) : stage === "passed" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 bg-neutral-800 px-8 text-center text-white">
+            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-lime text-[32px] font-semibold text-black animate-check-pop">
+              ✓
+            </div>
+            <p className="text-[16px] font-semibold">Liveness + face match passed</p>
+          </div>
+        ) : stage === "failed" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 bg-neutral-800 px-8 text-center text-white">
+            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-[#C9A227] text-[32px] font-semibold text-black">
+              !
+            </div>
+            <p className="text-[16px] font-semibold">
+              {forceOutcome === "deepfake" ? "Deepfake / spoof suspected" : "Face mismatch"}
+            </p>
+          </div>
+        ) : snapshot && snapshot !== "demo" ? (
           <img src={snapshot} alt="Captured selfie" className="h-full w-full object-cover" />
         ) : snapshot === "demo" ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 bg-neutral-800 px-8 text-center text-white">
@@ -142,14 +214,39 @@ export function SelfieCapturePage({
         )}
       </div>
 
-      <ul className="space-y-1 text-[16px] text-text-secondary">
-        <li>· Remove glasses and look straight at the camera</li>
-        <li>· Keep your full face inside the oval</li>
-      </ul>
+      {stage === "camera" && (
+        <ul className="space-y-1 text-[16px] text-text-secondary">
+          <li>· Remove glasses and look straight at the camera</li>
+          <li>· Keep your full face inside the oval</li>
+        </ul>
+      )}
 
-      {snapshot ? (
+      {stage === "passed" || stage === "failed" ? (
         <div className="space-y-4">
-          <Button onClick={confirm}>Use this selfie</Button>
+          {stage === "failed" && (
+            <Button variant="secondary" onClick={retake}>
+              Retake selfie
+            </Button>
+          )}
+          <Button
+            onClick={() => {
+              stopCamera();
+              const outcome = forceOutcome ?? "pass";
+              if (outcome === "mismatch") {
+                onComplete({ passed: false, score: 0.42, mismatch: true });
+              } else if (outcome === "deepfake") {
+                onComplete({ passed: false, score: 0.18, deepfake: true });
+              } else {
+                onComplete({ passed: true, score: 0.94 });
+              }
+            }}
+          >
+            {stage === "passed" ? "Use verified selfie" : "Close"}
+          </Button>
+        </div>
+      ) : stage === "liveness" || stage === "match" ? null : snapshot ? (
+        <div className="space-y-4">
+          <Button onClick={confirm}>Run liveness & face match</Button>
           <Button variant="secondary" onClick={retake}>
             Retake
           </Button>

@@ -1,3 +1,6 @@
+import type { KycCaseState } from "./kycCase";
+import { defaultKycCase } from "./kycCase";
+
 export type Residency = "resident" | "nri" | null;
 export type Occupation = "salaried" | "self_employed" | null;
 export type LoanType = "home" | "transfer" | null;
@@ -22,7 +25,31 @@ export type IdentityPhase =
   | "manual_pan"
   | "manual_aadhaar"
   | "manual_pending"
+  | "ckyc_found"
+  | "api_outage"
   | "done";
+
+export type {
+  KycCaseStatus,
+  PanLifecycle,
+  AadhaarLifecycle,
+  ConsentLifecycle,
+  FacePhase,
+  VideoPhase,
+  RiskPhase,
+  CkycStatus,
+  KycErrorClass,
+  ManualReviewOutcome,
+  DocMeta,
+  KycAuditEvent,
+  KycCaseState,
+} from "./kycCase";
+
+export {
+  defaultKycCase,
+  makeAuditEvent,
+  kycApprovalReady,
+} from "./kycCase";
 
 export type LoanStatus =
   | "not_started"
@@ -130,6 +157,8 @@ export type AppState = {
     /** Open live selfie capture instead of UploadBox for selfie. */
     selfieCaptureOpen: boolean;
     emailOtp: string;
+    /** Comprehensive KYC Case parallel lifecycles (Home_Loan_KYC_Complete_State_Machine). */
+    case: KycCaseState;
   };
   verifyDocs: Record<string, DocStatus>;
   loanStatus: LoanStatus;
@@ -140,7 +169,8 @@ export type AppState = {
   sheet: JourneySheet;
   discoverStep: 1 | 2 | 3;
   applyStep: 1 | 2 | 3 | 4;
-  kycStep: 1 | 2 | 3 | 4 | 5 | 6;
+  /** 1 Identity · 2 Mobile · 3 Email · 4 Docs · 5 Face · 6 Video · 7 Address · 8 Compliance/Risk/Outcome */
+  kycStep: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 };
 
 export const BANK_OFFERS: BankOffer[] = [
@@ -279,6 +309,7 @@ export const initialState: AppState = {
     identityNameMismatch: false,
     selfieCaptureOpen: false,
     emailOtp: "",
+    case: defaultKycCase(),
   },
   verifyDocs: {
     salary_slips: "not_started",
@@ -327,7 +358,14 @@ export const PERSONA_PRESETS: Record<DemoPersona, AppState> = {
       addressVerified: false,
       complianceDone: false,
       complete: false,
-      docs: { passport: "uploaded", visa: "not_started", pan: "not_started", selfie: "not_started" },
+      docs: {
+        passport: "uploaded",
+        visa: "not_started",
+        pan: "not_started",
+        selfie: "not_started",
+        address_proof: "not_started",
+        income_proof: "not_started",
+      },
       indiaAddress: "12, MG Road, Bengaluru 560001",
       overseasAddress: "Marina Walk, Dubai Marina, UAE",
       taxCountry: "United Arab Emirates",
@@ -342,6 +380,10 @@ export const PERSONA_PRESETS: Record<DemoPersona, AppState> = {
       identityNameMismatch: false,
       selfieCaptureOpen: false,
       emailOtp: "",
+      case: defaultKycCase({
+        caseStatus: "in_progress",
+        consent: "accepted",
+      }),
     },
   },
   done: {
@@ -359,7 +401,7 @@ export const PERSONA_PRESETS: Record<DemoPersona, AppState> = {
     trackStep: 6,
     discoverStep: 3,
     applyStep: 4,
-    kycStep: 6,
+    kycStep: 8,
     kyc: {
       mobileVerified: true,
       emailVerified: true,
@@ -367,7 +409,14 @@ export const PERSONA_PRESETS: Record<DemoPersona, AppState> = {
       addressVerified: true,
       complianceDone: true,
       complete: true,
-      docs: { passport: "uploaded", visa: "uploaded", pan: "uploaded", selfie: "uploaded" },
+      docs: {
+        passport: "accepted",
+        visa: "accepted",
+        pan: "accepted",
+        selfie: "accepted",
+        address_proof: "accepted",
+        income_proof: "accepted",
+      },
       indiaAddress: "12, MG Road, Bengaluru 560001",
       overseasAddress: "Marina Walk, Dubai Marina, UAE",
       taxCountry: "United Arab Emirates",
@@ -382,6 +431,22 @@ export const PERSONA_PRESETS: Record<DemoPersona, AppState> = {
       identityNameMismatch: false,
       selfieCaptureOpen: false,
       emailOtp: "",
+      case: defaultKycCase({
+        caseStatus: "verified",
+        panLifecycle: "verified",
+        aadhaarLifecycle: "verified",
+        consent: "recorded",
+        face: { phase: "passed", score: 0.94 },
+        video: { phase: "approved" },
+        risk: {
+          phase: "cleared",
+          amlClear: true,
+          sanctionsClear: true,
+          fraudScore: 12,
+        },
+        ckyc: { status: "found", ref: "CKYC-998877" },
+        manualReview: { outcome: "none" },
+      }),
     },
     verifyDocs: {
       salary_slips: "accepted",
@@ -436,9 +501,9 @@ export function screenForLoanStatus(status: LoanStatus): ScreenId {
 
 export function kycDocKeys(residency: Residency): string[] {
   if (residency === "nri") {
-    return ["passport", "visa", "pan", "selfie"];
+    return ["passport", "visa", "pan", "selfie", "address_proof", "income_proof"];
   }
-  return ["aadhaar", "pan", "selfie"];
+  return ["aadhaar", "pan", "selfie", "address_proof", "income_proof"];
 }
 
 /** Optional NRI uploads — never block Continue. */
@@ -457,6 +522,8 @@ export function docLabel(key: string): string {
     oci: "OCI card (if applicable)",
     labour_card: "Gulf labour / work permit card",
     form60: "Form 60",
+    address_proof: "Address proof",
+    income_proof: "Income proof",
     salary_slips: "Salary slips (last 3 months)",
     bank_statements: "Bank statements (6 months)",
     property_docs: "Property documents",

@@ -4,11 +4,13 @@ import type {
   DocStatus,
   IdentityPhase,
   JourneySheet,
+  KycCaseState,
   LoanStatus,
   LoanType,
   Residency,
 } from "@/lib/types";
-import { kycDocKeys, kycOptionalDocKeys, TRACK_MILESTONES } from "@/lib/types";
+import { defaultKycCase, kycDocKeys, kycOptionalDocKeys, TRACK_MILESTONES } from "@/lib/types";
+import { deepKycCase } from "@/lib/kycNavSeeds";
 
 export type SmNavApi = {
   state: AppState;
@@ -92,6 +94,7 @@ function seedMidJourney(api: SmNavApi, ctx: Ctx, status: "kyc" | "verify") {
       identityVerified: true,
       addressVerified: true,
       complianceDone: true,
+      case: deepKycCase("verified"),
     });
   }
   api.closeSheet();
@@ -108,39 +111,69 @@ function node(
 }
 
 /**
+ * Flatten a parent/child graph into pre-order so StateMachineNav's flat list
+ * nests visually (children immediately follow their parent). Sibling order
+ * follows first-seen order in `nodes`.
+ */
+function orderSmNodesAsTree(nodes: SmNode[], rootId: string): SmNode[] {
+  const children = new Map<string, SmNode[]>();
+  for (const n of nodes) {
+    if (!n.parentId) continue;
+    const list = children.get(n.parentId) ?? [];
+    list.push(n);
+    children.set(n.parentId, list);
+  }
+  const root = nodes.find((n) => n.id === rootId);
+  if (!root) return nodes;
+  const out: SmNode[] = [root];
+  const walk = (id: string) => {
+    for (const child of children.get(id) ?? []) {
+      out.push(child);
+      walk(child.id);
+    }
+  };
+  walk(rootId);
+  return out;
+}
+
+/**
  * One journey tree per loan type.
  * LoanStatus is not a separate branch — each stage IS the status, with sheet
  * sub-steps nested underneath.
  *
  *   Home loan
  *   ├── Start (not_started)
- *   ├── Check eligibility (discover | offers)
- *   ├── Add Personal details (apply)
- *   ├── Complete KYC (kyc)
- *   ├── Verify loan (verify)
- *   └── Track loan (track → active)
+ *   ├── Find Loan Offers (discover | offers)
+ *   ├── Complete Application (apply)
+ *   ├── Verify Identity (kyc)
+ *   ├── Bank Review (verify)
+ *   └── Loan Status (track → active)
  */
 function loanBranch(ctx: Ctx, parentId: string, depth: number): SmNode[] {
   const pathRoot = `User.${ctx.residency}.Loan.${ctx.loanType}`;
   const loanId = `${parentId}.loan.${ctx.loanType}`;
   const isNri = ctx.residency === "nri";
+  const loanNode = node({
+    id: loanId,
+    path: pathRoot,
+    label: ctx.loanType === "home" ? "Home loan" : "Transfer loan",
+    depth,
+    parentId,
+    specificity: 8,
+    isActive: (s) => matchCtx(s, ctx) && s.nav === "loan" && !s.sheet && s.loanStatus === "not_started",
+    apply: (api) => {
+      ensureCtx(api, ctx);
+      goLoan(api);
+      api.closeSheet();
+    },
+  });
+
+  // Transfer-loan journeys are intentionally outside this prototype's scope.
+  // Keep the branch visible as a non-expandable leaf for both residencies.
+  if (ctx.loanType === "transfer") return [loanNode];
 
   return [
-    node({
-      id: loanId,
-      path: pathRoot,
-      label: ctx.loanType === "home" ? "Home loan" : "Transfer loan",
-      depth,
-      parentId,
-      specificity: 8,
-      isActive: (s) => matchCtx(s, ctx) && s.nav === "loan" && !s.sheet && s.loanStatus === "not_started",
-      apply: (api) => {
-        ensureCtx(api, ctx);
-        goLoan(api);
-        api.closeSheet();
-      },
-    }),
-
+    loanNode,
     ...stageStart(ctx, loanId, depth + 1, pathRoot),
     ...stageEligibility(ctx, loanId, depth + 1, pathRoot),
     ...stageApply(ctx, loanId, depth + 1, pathRoot),
@@ -171,7 +204,7 @@ function stageStart(ctx: Ctx, loanId: string, depth: number, pathRoot: string): 
     node({
       id: `${id}.action`,
       path: `${pathRoot}.Journey.start.action`,
-      label: ctx.loanType === "home" ? "Action: Start Home Loan" : "Action: Transfer Existing Loan",
+      label: ctx.loanType === "home" ? "Action: Find Loan Offers" : "Action: Transfer Existing Loan",
       depth: depth + 1,
       parentId: id,
       specificity: 4,
@@ -190,7 +223,7 @@ function stageEligibility(ctx: Ctx, loanId: string, depth: number, pathRoot: str
     node({
       id,
       path: `${pathRoot}.Journey.eligibility`,
-      label: "Check eligibility · discover / offers",
+      label: "Find Loan Offers · discover / offers",
       depth,
       parentId: loanId,
       specificity: 16,
@@ -220,25 +253,9 @@ function stageEligibility(ctx: Ctx, loanId: string, depth: number, pathRoot: str
       },
     }),
     node({
-      id: `${id}.step2`,
-      path: `${pathRoot}.Discover.step2_eligibility`,
-      label: "2 · Your eligibility · discover",
-      depth: depth + 1,
-      parentId: id,
-      specificity: 24,
-      isActive: (s) => matchCtx(s, ctx) && s.sheet === "discover" && s.discoverStep === 2,
-      apply: (api) => {
-        ensureCtx(api, ctx);
-        openJourneySheet(api, "discover");
-        api.setField("eligibilityCalculated", true);
-        api.setField("loanStatus", "discover");
-        api.setDiscoverStep(2);
-      },
-    }),
-    node({
       id: `${id}.step3`,
       path: `${pathRoot}.Discover.step3_offers`,
-      label: "3 · Compare bank offers · offers",
+      label: "2 · Compare bank offers · offers",
       depth: depth + 1,
       parentId: id,
       specificity: 24,
@@ -281,7 +298,7 @@ function stageApply(ctx: Ctx, loanId: string, depth: number, pathRoot: string): 
     node({
       id,
       path: `${pathRoot}.Journey.apply`,
-      label: "Add Personal details · apply",
+      label: "Complete Application · apply",
       depth,
       parentId: loanId,
       specificity: 16,
@@ -439,6 +456,8 @@ type KycEdgeSeed = {
   indiaAddress?: string;
   overseasAddress?: string;
   loanStatus?: LoanStatus;
+  /** Deep parallel lifecycle seed for KYC Case */
+  caseSeed?: Partial<KycCaseState> | ReturnType<typeof deepKycCase>;
 };
 
 function openKycEdge(api: SmNavApi, ctx: Ctx, seed: KycEdgeSeed) {
@@ -465,7 +484,7 @@ function openKycEdge(api: SmNavApi, ctx: Ctx, seed: KycEdgeSeed) {
     mobileVerified,
     emailVerified: seed.emailVerified ?? (step >= 3 ? seed.emailVerified !== false : true),
     identityVerified: seed.identityVerified ?? step >= 5,
-    addressVerified: seed.addressVerified ?? step >= 6,
+    addressVerified: seed.addressVerified ?? step >= 8,
     complianceDone: seed.complianceDone ?? false,
     complete: seed.complete ?? false,
     useForm60: seed.useForm60 ?? false,
@@ -492,6 +511,9 @@ function openKycEdge(api: SmNavApi, ctx: Ctx, seed: KycEdgeSeed) {
         : residency === "nri"
           ? api.state.kyc.overseasAddress || "Marina Walk, Dubai Marina, UAE"
           : "",
+    case: seed.caseSeed
+      ? { ...defaultKycCase(), ...seed.caseSeed }
+      : api.state.kyc.case ?? defaultKycCase(),
   };
 
   if (seed.emailVerified !== undefined) kyc.emailVerified = seed.emailVerified;
@@ -521,8 +543,10 @@ function stageKyc(
     2: "2 · Mobile",
     3: "3 · Email",
     4: isNri ? "4 · NRI documents" : "4 · Resident documents",
-    5: "5 · Address",
-    6: "6 · Compliance",
+    5: "5 · Face & liveness",
+    6: "6 · Video KYC",
+    7: "7 · Address",
+    8: "8 · Risk & outcome",
   };
 
   const step1 = `${id}.step1`;
@@ -531,6 +555,8 @@ function stageKyc(
   const step4 = `${id}.step4`;
   const step5 = `${id}.step5`;
   const step6 = `${id}.step6`;
+  const step7 = `${id}.step7`;
+  const step8 = `${id}.step8`;
 
   const identityLeaf = (
     key: string,
@@ -538,6 +564,7 @@ function stageKyc(
     pathSuffix: string,
     seed: KycEdgeSeed,
     isActiveExtra: (s: AppState) => boolean,
+    specificity = 32,
   ): SmNode =>
     node({
       id: `${step1}.${key}`,
@@ -545,7 +572,7 @@ function stageKyc(
       label,
       depth: depth + 2,
       parentId: step1,
-      specificity: 32,
+      specificity,
       isActive: (s) =>
         matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 1 && isActiveExtra(s),
       apply: (api) => openKycEdge(api, ctx, { ...seed, step: 1 }),
@@ -555,7 +582,7 @@ function stageKyc(
     node({
       id,
       path: `${pathRoot}.Journey.kyc`,
-      label: "Complete KYC · kyc",
+      label: "Verify Identity · kyc",
       depth,
       parentId: loanId,
       specificity: 16,
@@ -571,7 +598,7 @@ function stageKyc(
         openJourneySheet(api, "kyc");
       },
     }),
-    ...([1, 2, 3, 4, 5, 6] as const).map((step) =>
+    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map((step) =>
       node({
         id: `${id}.step${step}`,
         path: `${pathRoot}.KYC.step${step}`,
@@ -583,9 +610,21 @@ function stageKyc(
         apply: (api) => {
           openKycEdge(api, ctx, {
             step,
-            identityPhase: step === 1 ? "intro" : undefined,
-            docsMode: step >= 4 ? "empty" : undefined,
+            identityPhase: step === 1 ? "intro" : "done",
+            docsMode: step >= 4 ? (step >= 5 ? "uploaded" : "empty") : undefined,
             mobileVerified: step >= 3 ? true : step === 2 ? false : undefined,
+            identityVerified: step >= 5,
+            addressVerified: step >= 8,
+            caseSeed:
+              step === 5
+                ? deepKycCase("face_waiting")
+                : step === 6
+                  ? deepKycCase("face_passed")
+                  : step === 7
+                    ? deepKycCase("video_approved")
+                    : step === 8
+                      ? deepKycCase("risk_low")
+                      : deepKycCase("identity_in_progress"),
           });
         },
       }),
@@ -737,7 +776,7 @@ function stageKyc(
     ),
     identityLeaf(
       "digilocker_aadhaar_otp",
-      "DigiLocker · Aadhaar OTP (PAN verified)",
+      "Aadhaar OTP · PAN verified",
       "digilocker.aadhaar_otp",
       {
         step: 1,
@@ -745,12 +784,19 @@ function stageKyc(
         panInDigilocker: true,
         aadhaarInDigilocker: true,
         docsMode: "pan_verified_only",
+        caseSeed: deepKycCase("identity_in_progress", {
+          aadhaarLifecycle: "otp_sent",
+          aadhaarOtpExpired: false,
+        }),
       },
-      (s) => s.kyc.identityPhase === "aadhaar_otp" && s.kyc.panInDigilocker,
+      (s) =>
+        s.kyc.identityPhase === "aadhaar_otp" &&
+        s.kyc.panInDigilocker &&
+        !s.kyc.case?.aadhaarOtpExpired,
     ),
     identityLeaf(
       "digilocker_aadhaar_otp_pan_missing",
-      "DigiLocker · Aadhaar OTP (PAN missing)",
+      "Aadhaar OTP · PAN missing",
       "digilocker.aadhaar_otp_pan_missing",
       {
         step: 1,
@@ -758,8 +804,15 @@ function stageKyc(
         panInDigilocker: false,
         aadhaarInDigilocker: true,
         docsMode: "empty",
+        caseSeed: deepKycCase("identity_in_progress", {
+          aadhaarLifecycle: "otp_sent",
+          aadhaarOtpExpired: false,
+        }),
       },
-      (s) => s.kyc.identityPhase === "aadhaar_otp" && !s.kyc.panInDigilocker,
+      (s) =>
+        s.kyc.identityPhase === "aadhaar_otp" &&
+        !s.kyc.panInDigilocker &&
+        !s.kyc.case?.aadhaarOtpExpired,
     ),
     identityLeaf(
       "digilocker_done",
@@ -895,8 +948,77 @@ function stageKyc(
           docsMode: "digilocker_linked",
           mobileVerified: true,
           emailVerified: true,
+          caseSeed: deepKycCase("ckyc_found"),
         }),
     }),
+
+    identityLeaf(
+      "ckyc_found",
+      "CKYC · existing record found",
+      "ckyc.found",
+      {
+        step: 1,
+        identityPhase: "ckyc_found",
+        docsMode: "empty",
+        caseSeed: deepKycCase("ckyc_found"),
+      },
+      (s) => s.kyc.identityPhase === "ckyc_found" || s.kyc.case?.ckyc.status === "found",
+    ),
+    identityLeaf(
+      "api_outage",
+      "Identity · API outage",
+      "api_outage",
+      {
+        step: 1,
+        identityPhase: "api_outage",
+        docsMode: "empty",
+        caseSeed: deepKycCase("api_outage"),
+      },
+      (s) => s.kyc.identityPhase === "api_outage" || !!s.kyc.case?.apiOutage,
+    ),
+    identityLeaf(
+      "otp_expired",
+      "Aadhaar OTP · expired",
+      "aadhaar.otp_expired",
+      {
+        step: 1,
+        identityPhase: "aadhaar_otp",
+        panInDigilocker: true,
+        aadhaarInDigilocker: true,
+        docsMode: "pan_verified_only",
+        caseSeed: deepKycCase("otp_expired"),
+      },
+      (s) => s.kyc.identityPhase === "aadhaar_otp" && !!s.kyc.case?.aadhaarOtpExpired,
+      36,
+    ),
+    identityLeaf(
+      "duplicate_pan",
+      "PAN · duplicate detected",
+      "pan.duplicate",
+      {
+        step: 1,
+        identityPhase: "manual_pan",
+        docsMode: "empty",
+        caseSeed: deepKycCase("duplicate_pan"),
+      },
+      (s) => !!s.kyc.case?.duplicatePan,
+    ),
+    identityLeaf(
+      "consent_expired",
+      "Consent · expired",
+      "consent.expired",
+      {
+        step: 1,
+        identityPhase: "intro",
+        docsMode: "empty",
+        caseSeed: deepKycCase("consent_expired"),
+      },
+      (s) =>
+        s.kycStep === 1 &&
+        s.kyc.case?.consent === "expired" &&
+        s.kyc.case?.caseStatus !== "expired",
+      34,
+    ),
 
     // —— Step 2 mobile (incl. continue-while-pending) ——
     node({
@@ -1385,54 +1507,268 @@ function stageKyc(
     );
   }
 
-  // —— Step 5 address ——
+  // —— Step 5 face & liveness ——
   nodes.push(
     node({
-      id: `${step5}.${isNri ? "nri" : "resident"}`,
-      path: `${pathRoot}.KYC.step5.${isNri ? "nri" : "resident"}`,
-      label: isNri ? "Address · overseas + India" : "Address · India only",
+      id: `${step5}.waiting`,
+      path: `${pathRoot}.KYC.step5.waiting`,
+      label: "Face · waiting",
       depth: depth + 2,
       parentId: step5,
       specificity: 32,
       isActive: (s) =>
+        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 5 && s.kyc.case?.face.phase === "waiting",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 5,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("face_waiting"),
+        }),
+    }),
+    node({
+      id: `${step5}.mismatch`,
+      path: `${pathRoot}.KYC.step5.mismatch`,
+      label: "Face · mismatch failed",
+      depth: depth + 2,
+      parentId: step5,
+      specificity: 33,
+      isActive: (s) =>
         matchCtx(s, ctx) &&
         s.sheet === "kyc" &&
         s.kycStep === 5 &&
+        !!s.kyc.case?.face.mismatch,
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 5,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("face_failed_mismatch"),
+        }),
+    }),
+    node({
+      id: `${step5}.deepfake`,
+      path: `${pathRoot}.KYC.step5.deepfake`,
+      label: "Face · deepfake failed",
+      depth: depth + 2,
+      parentId: step5,
+      specificity: 33,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 5 &&
+        !!s.kyc.case?.face.deepfake,
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 5,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("face_failed_deepfake"),
+        }),
+    }),
+    node({
+      id: `${step5}.passed`,
+      path: `${pathRoot}.KYC.step5.passed`,
+      label: "Face · passed",
+      depth: depth + 2,
+      parentId: step5,
+      specificity: 32,
+      isActive: (s) =>
+        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 5 && s.kyc.case?.face.phase === "passed",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 5,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("face_passed"),
+        }),
+    }),
+    node({
+      id: `${step5}.capture_open`,
+      path: `${pathRoot}.KYC.step5.capture_open`,
+      label: "Face · selfie capture open",
+      depth: depth + 2,
+      parentId: step5,
+      specificity: 34,
+      isActive: (s) => matchCtx(s, ctx) && s.sheet === "kyc" && !!s.kyc.selfieCaptureOpen,
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 5,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          selfieCaptureOpen: true,
+          caseSeed: deepKycCase("face_waiting", { face: { phase: "selfie" } }),
+        }),
+    }),
+  );
+
+  // —— Step 6 Video KYC ——
+  nodes.push(
+    node({
+      id: `${step6}.scheduled`,
+      path: `${pathRoot}.KYC.step6.scheduled`,
+      label: "Video · scheduled",
+      depth: depth + 2,
+      parentId: step6,
+      specificity: 32,
+      isActive: (s) =>
+        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 6 && s.kyc.case?.video.phase === "scheduled",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 6,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("video_scheduled"),
+        }),
+    }),
+    node({
+      id: `${step6}.connected`,
+      path: `${pathRoot}.KYC.step6.connected`,
+      label: "Video · call in progress",
+      depth: depth + 2,
+      parentId: step6,
+      specificity: 33,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 6 &&
+        s.kyc.case?.video.phase === "connected",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 6,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("face_passed", {
+            video: { phase: "connected", scheduledAt: new Date().toISOString() },
+          }),
+        }),
+    }),
+    node({
+      id: `${step6}.interrupted`,
+      path: `${pathRoot}.KYC.step6.interrupted`,
+      label: "Video · interrupted",
+      depth: depth + 2,
+      parentId: step6,
+      specificity: 33,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 6 &&
+        s.kyc.case?.video.phase === "interrupted",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 6,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("video_interrupted"),
+        }),
+    }),
+    node({
+      id: `${step6}.approved`,
+      path: `${pathRoot}.KYC.step6.approved`,
+      label: "Video · approved",
+      depth: depth + 2,
+      parentId: step6,
+      specificity: 32,
+      isActive: (s) =>
+        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 6 && s.kyc.case?.video.phase === "approved",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 6,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("video_approved"),
+        }),
+    }),
+    node({
+      id: `${step6}.rejected`,
+      path: `${pathRoot}.KYC.step6.rejected`,
+      label: "Video · rejected",
+      depth: depth + 2,
+      parentId: step6,
+      specificity: 33,
+      isActive: (s) =>
+        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 6 && s.kyc.case?.video.phase === "rejected",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 6,
+          mobileVerified: true,
+          identityVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("face_passed", { video: { phase: "rejected" } }),
+        }),
+    }),
+  );
+
+  // —— Step 7 address ——
+  nodes.push(
+    node({
+      id: `${step7}.${isNri ? "nri" : "resident"}`,
+      path: `${pathRoot}.KYC.step7.${isNri ? "nri" : "resident"}`,
+      label: isNri ? "Address · overseas + India" : "Address · India only",
+      depth: depth + 2,
+      parentId: step7,
+      specificity: 32,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 7 &&
         !!s.kyc.indiaAddress.trim() &&
         (!isNri || !!s.kyc.overseasAddress.trim()),
       apply: (api) =>
         openKycEdge(api, ctx, {
-          step: 5,
+          step: 7,
           mobileVerified: true,
           identityVerified: true,
           docsMode: "uploaded",
           identityPhase: "done",
           indiaAddress: "12, MG Road, Bengaluru 560001",
           overseasAddress: isNri ? "Marina Walk, Dubai Marina, UAE" : "",
+          caseSeed: deepKycCase("video_approved"),
         }),
     }),
     node({
-      id: `${step5}.empty`,
-      path: `${pathRoot}.KYC.step5.empty`,
+      id: `${step7}.empty`,
+      path: `${pathRoot}.KYC.step7.empty`,
       label: "Address · empty fields",
       depth: depth + 2,
-      parentId: step5,
+      parentId: step7,
       specificity: 32,
       isActive: (s) =>
         matchCtx(s, ctx) &&
         s.sheet === "kyc" &&
-        s.kycStep === 5 &&
+        s.kycStep === 7 &&
         !s.kyc.indiaAddress.trim() &&
         (!isNri || !s.kyc.overseasAddress.trim()),
       apply: (api) =>
         openKycEdge(api, ctx, {
-          step: 5,
+          step: 7,
           mobileVerified: true,
           identityVerified: true,
           docsMode: "uploaded",
           identityPhase: "done",
           indiaAddress: "",
           overseasAddress: "",
+          caseSeed: deepKycCase("video_approved"),
         }),
     }),
   );
@@ -1440,70 +1776,76 @@ function stageKyc(
   if (isNri) {
     nodes.push(
       node({
-        id: `${step5}.india_empty`,
-        path: `${pathRoot}.KYC.step5.india_empty`,
+        id: `${step7}.india_empty`,
+        path: `${pathRoot}.KYC.step7.india_empty`,
         label: "Address · India empty",
         depth: depth + 2,
-        parentId: step5,
+        parentId: step7,
         specificity: 33,
         isActive: (s) =>
           matchCtx(s, ctx) &&
           s.sheet === "kyc" &&
-          s.kycStep === 5 &&
+          s.kycStep === 7 &&
           !s.kyc.indiaAddress.trim() &&
           !!s.kyc.overseasAddress.trim(),
         apply: (api) =>
           openKycEdge(api, ctx, {
-            step: 5,
+            step: 7,
             mobileVerified: true,
             identityVerified: true,
             docsMode: "uploaded",
             identityPhase: "done",
             indiaAddress: "",
             overseasAddress: "Marina Walk, Dubai Marina, UAE",
+            caseSeed: deepKycCase("video_approved"),
           }),
       }),
       node({
-        id: `${step5}.overseas_empty`,
-        path: `${pathRoot}.KYC.step5.overseas_empty`,
+        id: `${step7}.overseas_empty`,
+        path: `${pathRoot}.KYC.step7.overseas_empty`,
         label: "Address · overseas empty",
         depth: depth + 2,
-        parentId: step5,
+        parentId: step7,
         specificity: 33,
         isActive: (s) =>
           matchCtx(s, ctx) &&
           s.sheet === "kyc" &&
-          s.kycStep === 5 &&
+          s.kycStep === 7 &&
           !!s.kyc.indiaAddress.trim() &&
           !s.kyc.overseasAddress.trim(),
         apply: (api) =>
           openKycEdge(api, ctx, {
-            step: 5,
+            step: 7,
             mobileVerified: true,
             identityVerified: true,
             docsMode: "uploaded",
             identityPhase: "done",
             indiaAddress: "12, MG Road, Bengaluru 560001",
             overseasAddress: "",
+            caseSeed: deepKycCase("video_approved"),
           }),
       }),
     );
   }
 
-  // —— Step 6 compliance ——
+  // —— Step 8 risk & terminal outcomes ——
   nodes.push(
     node({
-      id: `${step6}.declarations`,
-      path: `${pathRoot}.KYC.step6.${isNri ? "nri_fatca" : "resident"}`,
-      label: isNri ? "Compliance · FATCA / CRS" : "Compliance · India tax / PEP",
+      id: `${step8}.declarations`,
+      path: `${pathRoot}.KYC.step8.${isNri ? "nri_fatca" : "resident"}`,
+      label: isNri ? "Risk · FATCA / CRS submit" : "Risk · India tax / PEP submit",
       depth: depth + 2,
-      parentId: step6,
+      parentId: step8,
       specificity: 32,
       isActive: (s) =>
-        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 6 && !s.kyc.complete,
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        !s.kyc.complete &&
+        s.kyc.case?.caseStatus === "in_progress",
       apply: (api) =>
         openKycEdge(api, ctx, {
-          step: 6,
+          step: 8,
           mobileVerified: true,
           identityVerified: true,
           addressVerified: true,
@@ -1512,42 +1854,90 @@ function stageKyc(
           complete: false,
           complianceDone: false,
           foreignTin: isNri ? "" : undefined,
+          caseSeed: deepKycCase("risk_low"),
         }),
     }),
     node({
-      id: `${step6}.complete`,
-      path: `${pathRoot}.KYC.step6.complete`,
-      label: "KYC submitted · complete",
+      id: `${step8}.manual_review`,
+      path: `${pathRoot}.KYC.step8.manual_review`,
+      label: "Manual review queue",
       depth: depth + 2,
-      parentId: step6,
-      specificity: 32,
-      isActive: (s) => matchCtx(s, ctx) && s.kyc.complete && (s.sheet === "kyc" || s.loanStatus === "verify"),
-      apply: (api) => {
+      parentId: step8,
+      specificity: 34,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        s.kyc.case?.caseStatus === "manual_review",
+      apply: (api) =>
         openKycEdge(api, ctx, {
-          step: 6,
+          step: 8,
           mobileVerified: true,
           identityVerified: true,
           addressVerified: true,
           docsMode: "uploaded",
           identityPhase: "done",
-          complete: true,
-          complianceDone: true,
-          loanStatus: "verify",
-        });
-      },
+          caseSeed: deepKycCase("manual_review"),
+        }),
     }),
     node({
-      id: `${step6}.summary`,
-      path: `${pathRoot}.KYC.step6.summary`,
-      label: "KYC-7 · completion summary",
+      id: `${step8}.risk_medium`,
+      path: `${pathRoot}.KYC.step8.risk_medium`,
+      label: "Risk · medium AML",
       depth: depth + 2,
-      parentId: step6,
-      specificity: 33,
+      parentId: step8,
+      specificity: 34,
       isActive: (s) =>
-        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 6 && s.kyc.complete && s.loanStatus === "kyc",
+        matchCtx(s, ctx) && s.sheet === "kyc" && s.kycStep === 8 && s.kyc.case?.risk.phase === "medium",
       apply: (api) =>
         openKycEdge(api, ctx, {
-          step: 6,
+          step: 8,
+          mobileVerified: true,
+          identityVerified: true,
+          addressVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("risk_medium"),
+        }),
+    }),
+    node({
+      id: `${step8}.sanctions`,
+      path: `${pathRoot}.KYC.step8.sanctions`,
+      label: "Risk · sanctions hit",
+      depth: depth + 2,
+      parentId: step8,
+      specificity: 35,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        s.kyc.case?.lastReasonCode === "SANCTIONS_HIT",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 8,
+          mobileVerified: true,
+          identityVerified: true,
+          addressVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("risk_sanctions"),
+        }),
+    }),
+    node({
+      id: `${step8}.verified`,
+      path: `${pathRoot}.KYC.step8.verified`,
+      label: "Terminal · VERIFIED",
+      depth: depth + 2,
+      parentId: step8,
+      specificity: 36,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        (s.kyc.case?.caseStatus === "verified" || s.kyc.complete),
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 8,
           mobileVerified: true,
           identityVerified: true,
           addressVerified: true,
@@ -1556,41 +1946,212 @@ function stageKyc(
           complete: true,
           complianceDone: true,
           loanStatus: "kyc",
-          foreignTin: isNri ? "AE-TIN-001" : undefined,
+          caseSeed: deepKycCase("verified"),
         }),
+    }),
+    node({
+      id: `${step8}.rejected`,
+      path: `${pathRoot}.KYC.step8.rejected`,
+      label: "Terminal · REJECTED",
+      depth: depth + 2,
+      parentId: step8,
+      specificity: 36,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        s.kyc.case?.caseStatus === "rejected",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 8,
+          mobileVerified: true,
+          identityVerified: true,
+          addressVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("rejected"),
+        }),
+    }),
+    node({
+      id: `${step8}.expired`,
+      path: `${pathRoot}.KYC.step8.expired`,
+      label: "Terminal · EXPIRED",
+      depth: depth + 2,
+      parentId: step8,
+      specificity: 36,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        s.kyc.case?.caseStatus === "expired",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 8,
+          mobileVerified: true,
+          identityVerified: true,
+          addressVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("expired"),
+        }),
+    }),
+    node({
+      id: `${step8}.withdrawn`,
+      path: `${pathRoot}.KYC.step8.withdrawn`,
+      label: "Terminal · WITHDRAWN",
+      depth: depth + 2,
+      parentId: step8,
+      specificity: 36,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        s.kyc.case?.caseStatus === "withdrawn",
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 8,
+          mobileVerified: true,
+          identityVerified: true,
+          addressVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          caseSeed: deepKycCase("withdrawn"),
+        }),
+    }),
+    node({
+      id: `${step8}.unlock_verify`,
+      path: `${pathRoot}.KYC.step8.unlock_verify`,
+      label: "Verified · unlock underwriting",
+      depth: depth + 2,
+      parentId: step8,
+      specificity: 37,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 8 &&
+        s.kyc.case?.caseStatus === "verified" &&
+        s.loanStatus === "verify",
+      apply: (api) => {
+        openKycEdge(api, ctx, {
+          step: 8,
+          mobileVerified: true,
+          identityVerified: true,
+          addressVerified: true,
+          docsMode: "uploaded",
+          identityPhase: "done",
+          complete: true,
+          complianceDone: true,
+          loanStatus: "verify",
+          caseSeed: deepKycCase("verified"),
+        });
+      },
     }),
   );
 
   if (isNri) {
     nodes.push(
       node({
-        id: `${step6}.tin_filled`,
-        path: `${pathRoot}.KYC.step6.tin_filled`,
+        id: `${step8}.tin_filled`,
+        path: `${pathRoot}.KYC.step8.tin_filled`,
         label: "Compliance · foreign TIN filled",
         depth: depth + 2,
-        parentId: step6,
+        parentId: step8,
         specificity: 34,
         isActive: (s) =>
           matchCtx(s, ctx) &&
           s.sheet === "kyc" &&
-          s.kycStep === 6 &&
+          s.kycStep === 8 &&
           !s.kyc.complete &&
           !!s.kyc.foreignTin.trim(),
         apply: (api) =>
           openKycEdge(api, ctx, {
-            step: 6,
+            step: 8,
             mobileVerified: true,
             identityVerified: true,
             addressVerified: true,
             docsMode: "uploaded",
             identityPhase: "done",
             foreignTin: "AE-TIN-001",
+            caseSeed: deepKycCase("risk_low"),
           }),
       }),
     );
   }
 
-  return nodes;
+  // OCR / doc edge under step 4
+  nodes.push(
+    node({
+      id: `${step4}.ocr_processing`,
+      path: `${pathRoot}.KYC.step4.ocr_processing`,
+      label: "Docs · OCR processing",
+      depth: depth + 2,
+      parentId: step4,
+      specificity: 34,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 4 &&
+        Object.values(s.kyc.case?.docMeta ?? {}).some((m) => m.processing),
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 4,
+          mobileVerified: true,
+          docsMode: "partial",
+          identityPhase: "done",
+          caseSeed: deepKycCase("docs_ocr"),
+        }),
+    }),
+    node({
+      id: `${step4}.ocr_low_confidence`,
+      path: `${pathRoot}.KYC.step4.ocr_low_confidence`,
+      label: "Docs · OCR low confidence",
+      depth: depth + 2,
+      parentId: step4,
+      specificity: 34,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 4 &&
+        Object.values(s.kyc.case?.docMeta ?? {}).some(
+          (m) => typeof m.ocrConfidence === "number" && m.ocrConfidence < 0.7 && !m.processing,
+        ),
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 4,
+          mobileVerified: true,
+          docsMode: "partial",
+          identityPhase: "done",
+          caseSeed: deepKycCase("docs_ocr", {
+            docMeta: { pan: { processing: false, ocrConfidence: 0.45, blurry: false } },
+          }),
+        }),
+    }),
+    node({
+      id: `${step4}.blurry`,
+      path: `${pathRoot}.KYC.step4.blurry`,
+      label: "Docs · blurry reupload",
+      depth: depth + 2,
+      parentId: step4,
+      specificity: 34,
+      isActive: (s) =>
+        matchCtx(s, ctx) &&
+        s.sheet === "kyc" &&
+        s.kycStep === 4 &&
+        Object.values(s.kyc.case?.docMeta ?? {}).some((m) => m.blurry),
+      apply: (api) =>
+        openKycEdge(api, ctx, {
+          step: 4,
+          mobileVerified: true,
+          docsMode: "partial",
+          identityPhase: "done",
+          caseSeed: deepKycCase("docs_ocr", {
+            docMeta: { passport: { blurry: true, ocrConfidence: 0.3 }, aadhaar: { blurry: true } },
+          }),
+        }),
+    }),
+  );
+
+  return orderSmNodesAsTree(nodes, id);
 }
 
 function stageVerify(ctx: Ctx, loanId: string, depth: number, pathRoot: string): SmNode[] {
@@ -1599,7 +2160,7 @@ function stageVerify(ctx: Ctx, loanId: string, depth: number, pathRoot: string):
     node({
       id,
       path: `${pathRoot}.Journey.verify`,
-      label: "Verify loan · verify",
+      label: "Bank Review · verify",
       depth,
       parentId: loanId,
       specificity: 16,
@@ -1647,7 +2208,7 @@ function stageTrack(ctx: Ctx, loanId: string, depth: number, pathRoot: string): 
     node({
       id,
       path: `${pathRoot}.Journey.track`,
-      label: "Track loan · track → active",
+      label: "Loan Status · track → active",
       depth,
       parentId: loanId,
       specificity: 16,

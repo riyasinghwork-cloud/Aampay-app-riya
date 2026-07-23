@@ -35,7 +35,7 @@ export function ApplyScreen() {
 
   return (
     <Screen
-      title="Add Personal details"
+      title="Complete Application"
       subtitle={`Applying with ${bank}`}
       onBack={() => goTo("discover")}
     >

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type CSSProperties, type ReactNode } from "react";
 import { HumanIllustration, type IllustrationScene } from "@/components/ui/HumanIllustration";
 
 const EmbeddedCtx = createContext(false);
@@ -34,28 +34,42 @@ export function Screen({
   }
 
   return (
-    <div className={`animate-fade-in mx-auto w-full px-4 pb-8 pt-8 ${wide ? "max-w-lg" : ""}`}>
-      {onBack && (
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 inline-flex items-center gap-1 text-[16px] font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2"
-        >
-          <span aria-hidden>←</span> Back
-        </button>
-      )}
-      {title && (
-        <div className="mb-8 flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-[32px] font-semibold leading-tight tracking-[-0.02em] text-text">{title}</h1>
-            {subtitle && <p className="text-[16px] leading-relaxed text-text-secondary">{subtitle}</p>}
-          </div>
-          {illustration && (
-            <HumanIllustration scene={illustration} className="mt-1 animate-float-soft" />
+    <div className="animate-fade-in flex min-h-full flex-col bg-black">
+      {/* Dark header band — content surface overlaps its lower half */}
+      <div className="bg-black px-4 pb-8 pt-4">
+        <div className={`mx-auto w-full ${wide ? "max-w-lg" : ""}`}>
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="mb-4 inline-flex items-center gap-1 text-[16px] font-semibold text-white/70 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lime"
+            >
+              <span aria-hidden>←</span> Back
+            </button>
+          )}
+          {title && (
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <h1 className="text-[32px] font-semibold leading-tight tracking-[-0.02em] text-white">{title}</h1>
+                {subtitle && <p className="text-[16px] leading-relaxed text-white/65">{subtitle}</p>}
+              </div>
+              {illustration && (
+                <span
+                  style={{ "--color-black": "#FFFFFF", "--color-white": "#000000" } as CSSProperties}
+                >
+                  <HumanIllustration scene={illustration} className="mt-1 animate-float-soft" />
+                </span>
+              )}
+            </div>
           )}
         </div>
-      )}
-      <div className="motion-stagger">{children}</div>
+      </div>
+      {/* Content surface pulled up over the band */}
+      <div className="-mt-4 flex-1 rounded-t-[28px] bg-bg px-4 pb-[calc(64px+env(safe-area-inset-bottom,0px))] pt-8">
+        <div className={`mx-auto w-full ${wide ? "max-w-lg" : ""}`}>
+          <div className="motion-stagger">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }

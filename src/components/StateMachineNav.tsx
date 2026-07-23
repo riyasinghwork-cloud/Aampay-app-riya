@@ -105,25 +105,35 @@ export function StateMachineNav() {
   const childrenOf = (id: string) => SM_NODES.some((n) => n.parentId === id);
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col border-r border-white/10 bg-[#212121] text-[#cfcfcf]">
-      <div className="sticky top-0 z-10 shrink-0 border-b border-white/10 bg-[#212121] px-4 py-4">
+    <aside className="flex h-full min-h-0 w-full flex-col border-r border-white/10 bg-black text-[#cfcfcf]">
+      <div className="sticky top-0 z-10 shrink-0 border-b border-white/10 bg-black px-4 py-4">
         <p className="text-[16px] font-semibold uppercase tracking-[0.12em] text-white/50">State machine</p>
         <div className="mt-1 flex flex-wrap gap-1">
-          <span className="rounded-full bg-white/10 px-1 py-1 font-mono text-[16px] text-white/80">
+          <span className="rounded-full bg-white/10 px-4 py-1 font-mono text-[16px] text-white/80">
             {state.loanStatus}
           </span>
           {state.sheet && (
-            <span className="rounded-full bg-lime/20 px-1 py-1 font-mono text-[16px] text-[#c8e86a]">
+            <span className="rounded-full bg-lime/20 px-4 py-1 font-mono text-[16px] text-[#c8e86a]">
               sheet:{state.sheet}
             </span>
           )}
+          {state.kyc.case?.caseStatus && (
+            <span className="rounded-full bg-white/10 px-4 py-1 font-mono text-[16px] text-white/80">
+              case:{state.kyc.case.caseStatus}
+            </span>
+          )}
+          {state.kyc.case?.risk.phase && state.kyc.case.risk.phase !== "not_started" && (
+            <span className="rounded-full bg-white/10 px-4 py-1 font-mono text-[16px] text-white/80">
+              risk:{state.kyc.case.risk.phase}
+            </span>
+          )}
           {state.residency && (
-            <span className="rounded-full bg-white/10 px-1 py-1 font-mono text-[16px] text-white/80">
+            <span className="rounded-full bg-white/10 px-4 py-1 font-mono text-[16px] text-white/80">
               {state.residency}
             </span>
           )}
           {state.loanType && (
-            <span className="rounded-full bg-white/10 px-1 py-1 font-mono text-[16px] text-white/80">
+            <span className="rounded-full bg-white/10 px-4 py-1 font-mono text-[16px] text-white/80">
               {state.loanType}
             </span>
           )}
